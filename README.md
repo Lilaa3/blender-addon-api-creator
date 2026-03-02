@@ -127,8 +127,8 @@ def log_math(a, b):
     print(f"Processing {a} and {b}")
 ```
 
-### 6. Inception: Chained Overrides
-Overrides can be targeted by other addons if they are named. This creates an execution chain where "Addon C" wraps "Addon B" which wraps "Addon A".
+### 6. Inception: Chained Hooks
+All types of hooks can be targeted by other addons if they are named. This creates an execution chain where "Addon C" wraps "Addon B" which wraps "Addon A".
 
 ```python
 @api.override(
