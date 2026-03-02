@@ -1,7 +1,6 @@
 #!/bin/bash
 set -e
 
-# Directory where zip files will be created
 DIST_DIR="dist"
 
 # Clean up previous builds
@@ -10,7 +9,6 @@ mkdir -p "$DIST_DIR"
 
 echo "Packaging examples..."
 
-# Iterate over each directory in examples/
 for addon_path in examples/*/; do
     addon_path=${addon_path%/} # Remove trailing slash
     addon_name=$(basename "$addon_path") # Get just the folder name
