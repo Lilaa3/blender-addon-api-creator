@@ -39,7 +39,11 @@ class APISystem:
     _pending_waiters: list[dict] = dataclasses.field(default_factory=list)
     _pending_exits: list[dict] = dataclasses.field(default_factory=list)
     _pending_expose_module: dict | None = None
-    _addon_path: AddonPath = ""
+    _addon_path: AddonPath = None
+
+    def __post_init__(self):
+        if not self._addon_path:
+            self._addon_path = get_addon_path()
 
     def register_contents(self, addon_path: AddonPath):
         self._addon_path = addon_path
@@ -79,7 +83,6 @@ class APISystem:
                 }
             )
 
-            owner = get_addon_path()
             system_name = self.system_name
 
             # Hack: Mimic the exact positional argument count for Blender's strict C-level checks
@@ -88,14 +91,14 @@ class APISystem:
             sig_str = f"{args_str}, *args, **kwargs" if args_str else "*args, **kwargs"
 
             env = {
-                "invoke_api": invoke_api,
-                "owner": owner,
-                "system_name": system_name,
-                "name": name,
-                "func": func,
+                "_wrapper_invoke_api": invoke_api,
+                "_wrapper_system": self,
+                "_wrapper_system_name": system_name,
+                "_wrapper_func_name": name,
+                "_wrapper_func": func,
             }
             exec(
-                f"def wrapper({sig_str}): return invoke_api(owner, system_name, name, func, {sig_str})",
+                f"def wrapper({sig_str}): return _wrapper_invoke_api(_wrapper_system._addon_path, _wrapper_system_name, _wrapper_func_name, _wrapper_func, {sig_str})",
                 env,
             )
 
@@ -173,10 +176,7 @@ class APISystem:
         return decorator
 
     def finalize_system(self):
-        registry = get_registry()
-        owner = get_addon_path()
-
-        registry.finalize_system(owner, self.system_name)
+        get_registry().finalize_system(self._addon_path, self.system_name)
 
     def expose_module(self, module: ModuleType):
         """Stores module so consumers can retrieve it via get_system_module()."""
@@ -282,8 +282,9 @@ class APISystem:
         return target
 
     def get_override(self, name: str) -> tuple[str, SystemKey, AddonName]:
-        owner = get_addon_path()
-        return get_registry().get_active_implementation(owner, self.system_name, name)
+        return get_registry().get_active_implementation(
+            self._addon_path, self.system_name, name
+        )
 
 
 def get_addon_path() -> AddonPath:
@@ -300,30 +301,34 @@ def get_system_module(name: AddonName, system_name: SystemKey) -> Optional[Modul
 class APIAddon:
     name: AddonName
     bl_info: dict[str, any]
+    addon_path: AddonPath = None
     systems: dict[SystemKey, APISystem] = dataclasses.field(default_factory=dict)
+
+    def __post_init__(self):
+        if not self.addon_path:
+            self.addon_path = get_addon_path()
 
     def register_addon(self):
         registry = get_registry()
         registry.register_addon(
-            get_addon_path(), self.name, MY_VERSION, {"bl_info": self.bl_info}
+            self.addon_path, self.name, MY_VERSION, {"bl_info": self.bl_info}
         )
 
     def unregister_addon(self):
         registry = get_registry()
-        registry.unregister_addon(get_addon_path())
+        registry.unregister_addon(self.addon_path)
 
     def register_system(self, system: APISystem):
         self.systems[system.system_name] = system
 
-        logger.info(f"Registering {get_addon_path()}:{system.system_name}")
-        system.register_contents(get_addon_path())
+        logger.info(f"Registering {self.addon_path}:{system.system_name}")
+        system.register_contents(self.addon_path)
         return system
 
     def unregister_system(self, system_name: SystemKey):
         system = self.systems.pop(system_name, None)
         if system is None:
             return
-
         system.unregister_system()
 
 
