@@ -65,7 +65,7 @@ class APISystem:
     def function(
         self,
         name: str,
-        version: APIVersion = APIVersion(1, 0, 0),
+        version: APIVersion = APIVersion(),
         unstable: bool = False,
     ):
         def decorator(func: Callable):
@@ -112,8 +112,8 @@ class APISystem:
         self,
         target: RuntimeTargetFunction,
         when: str = "before",
-        version: str = ">=1.0",
-        requires_provider: Optional[AddonName] = None,
+        version: str = "",
+        requires_provider: Optional[list[RuntimeTargetAddon]] = None,
         expose_api_as: Optional[RuntimeExposedHook] = None,
         yields_to: Optional[list[RuntimeTargetFunction]] = None,
     ):
@@ -125,7 +125,7 @@ class APISystem:
                     "hook_type": when,
                     "constraint": version,
                     "yields_to": [y.to_dict() for y in yields_to or []],
-                    "requires_provider": requires_provider,
+                    "requires_provider": [y.to_dict() for y in requires_provider or []],
                     "expose_api_as": expose_api_as.to_dict() if expose_api_as else None,
                 }
             )
@@ -185,7 +185,6 @@ class APISystem:
     def expose_all(
         self,
         target: object,
-        version: APIVersion = APIVersion(1, 0, 0),
         unstable: bool = True,
         recursive: bool = True,
         exclude: Optional[list[str]] = None,
@@ -244,20 +243,20 @@ class APISystem:
 
                         if isinstance(descriptor, classmethod):
                             base_func = descriptor.__func__
-                            wrapped = self.function(api_name, version, unstable)(
+                            wrapped = self.function(api_name, unstable=unstable)(
                                 base_func
                             )
                             setattr(obj, name, classmethod(wrapped))
                         elif isinstance(descriptor, staticmethod):
                             base_func = descriptor.__func__
-                            wrapped = self.function(api_name, version, unstable)(
+                            wrapped = self.function(api_name, unstable=unstable)(
                                 base_func
                             )
                             setattr(obj, name, staticmethod(wrapped))
                         elif isinstance(descriptor, property):
                             continue
                         else:
-                            wrapped = self.function(api_name, version, unstable)(member)
+                            wrapped = self.function(api_name, unstable=unstable)(member)
                             setattr(obj, name, wrapped)
                     except (TypeError, AttributeError):
                         pass

@@ -83,7 +83,10 @@ class APIRegistry:
             hook_type=HookType(hook_data["hook_type"]),
             version_constraint=hook_data.get("constraint", ">=1.0"),
             yields_to=yields_to,
-            requires_provider=hook_data.get("requires_provider"),
+            requires_provider=[
+                RuntimeTargetAddon.from_dict(p)
+                for p in hook_data.get("requires_provider", [])
+            ],
             expose_api_as=expose_api_as,
         )
 
@@ -288,12 +291,12 @@ class APIRegistry:
         error_missing_addon: bool = True,
         error_missing_system: bool = True,
     ):
-        systems: dict[tuple[str, SystemKey], RuntimeSystem] = {}
+        systems: list[RuntimeSystem] = []
         for path, addon in self._get_runtime_addons_by_name(
             addon_name, error_missing_addon
         ).items():
             if system_name in addon.systems:
-                systems[(path, system_name)] = addon.systems[system_name]
+                systems.append(addon.systems[system_name])
             elif error_missing_system:
                 raise KeyError(f"System {system_name} not found in {path}")
         return systems
@@ -671,7 +674,15 @@ class APIRegistry:
         """Checks if a hook is blocked by an existing addon."""
         return any(self._has_runtime_function(target) for target in yields_to)
 
-    def check_if_hook_targets(
+    def _meets_required(self, required: list[RuntimeTargetAddon]):
+        if not required:
+            return True
+        return all(
+            len(self._get_runtime_systems(addon.name, addon.system, False, False)) > 0
+            for addon in required
+        )
+
+    def _check_if_hook_targets(
         self, active: RuntimeExecutionNode, hook: RuntimeHook
     ) -> tuple[str | None, bool]:
         if (
@@ -679,6 +690,7 @@ class APIRegistry:
             and hook.target.addon == active.system.addon.name
             and hook.target.system == active.system.name
             and not self._is_yielded(hook.yields_to)
+            and self._meets_required(hook.requires_provider)
             and (active.version.match(hook.version_constraint))
         ):
             return self._get_hook_validation_error(hook), True
@@ -719,7 +731,7 @@ class APIRegistry:
 
             if hook.hook_type != HookType.OVERRIDE:
                 continue
-            result = self.check_if_hook_targets(active, hook)
+            result = self._check_if_hook_targets(active, hook)
             if result[1]:
                 if result[0] is None:
                     if hook.expose_api_as is None:
@@ -752,7 +764,7 @@ class APIRegistry:
             if hook.hook_type not in {HookType.BEFORE, HookType.AFTER}:
                 continue
             hook_errors = []
-            result = self.check_if_hook_targets(active, hook)
+            result = self._check_if_hook_targets(active, hook)
             if result[0] is not None:
                 hook_errors.append(result[0])
             if result[1]:
@@ -966,7 +978,8 @@ class APIRegistry:
         """Draws the detailed hook and override execution chain for a specific function."""
         box = layout.box()
         row = box.row()
-        row.label(text=f"{func.name} (v{func.version})", icon="NODETREE")
+        version = "" if func.version.is_none else f" (v{func.version})"
+        row.label(text=f"{func.name}{version}", icon="NODETREE")
         if func.is_unstable:
             unstable_row = row.row()
             unstable_row.alignment = "RIGHT"
@@ -1011,16 +1024,21 @@ class APIRegistry:
         for hook in system.hooks:
             target_sys_str = self._format_system_name(hook.target.system)
             error = self._get_hook_validation_error(hook)
+            hook_name = {
+                HookType.BEFORE: "Before",
+                HookType.AFTER: "After",
+                HookType.OVERRIDE: "Override",
+            }[hook.hook_type]
+
+            text = f"{hook_name} ({hook.func.__name__}) -> {hook.target.addon}:{target_sys_str}:{hook.target.function} {hook.version_constraint}"
             if error:
                 hook_col.label(
-                    text=f"INVALID {hook.hook_type.name} -> {hook.target.addon}:{target_sys_str}:{hook.target.function}",
+                    text=text,
                     icon="ERROR",
                 )
                 hook_col.label(text=f"  Reason: {error}")
             else:
-                hook_col.label(
-                    text=f"{hook.hook_type.name} -> {hook.target.addon}:{target_sys_str}:{hook.target.function}"
-                )
+                hook_col.label(text=text)
 
     def _draw_system_waiters(self, layout, system: RuntimeSystem):
         if not system.on_ready and not system.on_exit:

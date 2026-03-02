@@ -25,8 +25,12 @@ class APIVersion:
     minor: int | None = None
     patch: int | None = None
 
+    @property
+    def is_none(self):
+        return self.major is None and self.minor is None and self.patch is None
+
     def __str__(self):
-        if self.major is None and self.minor is None and self.patch is None:
+        if self.is_none:
             return "None"
         return f"{self.major}.{self.minor}.{self.patch}"
 
@@ -45,7 +49,7 @@ class APIVersion:
         if not constraint:
             return True
         try:
-            if self.major is None and self.minor is None and self.patch is None:
+            if self.is_none:
                 return False
 
             op, ver_str = "==", constraint
@@ -189,7 +193,7 @@ class RuntimeHook:
     hook_type: HookType
     version_constraint: str = ">=1.0"
     yields_to: list[RuntimeTargetFunction] = field(default_factory=list)
-    requires_provider: Optional[AddonName] = None
+    requires_provider: list[RuntimeTargetAddon] = None
     expose_api_as: Optional[RuntimeExposedHook] = None
 
 
