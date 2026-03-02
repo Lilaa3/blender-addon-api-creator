@@ -26,7 +26,7 @@ def clean_registry():
         del sys.modules[registry._GLOBAL_KEY]
 
     # Force a fresh registry initialization
-    registry.register_registry(reload=True)
+    registry.register_registry(reload=True, with_ui=False)
 
     yield  # The test runs here
 

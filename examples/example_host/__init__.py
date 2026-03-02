@@ -79,7 +79,9 @@ api.expose_all(
 
 
 def register():
-    register_registry(reload=True)  # techinically not needed if you don't want reload
+    register_registry(
+        reload=True, with_ui=True
+    )  # techinically not needed if you don't want reload
     register_addon(name="HostAddon", bl_info=bl_info)
     register_system(api)
 

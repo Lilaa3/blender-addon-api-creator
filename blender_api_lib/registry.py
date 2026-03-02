@@ -1,3 +1,10 @@
+try:
+    import bpy
+
+    HAS_BPY = hasattr(bpy, "types")
+except ImportError:
+    HAS_BPY = False
+
 import logging
 import inspect
 import sys
@@ -31,11 +38,30 @@ _GLOBAL_KEY = "blender_addon_api_shared_registry"
 KNOWN_VERSIONS = [1]
 
 
+if HAS_BPY:
+
+    class API_OT_ToggleUISection(bpy.types.Operator):
+        """Toggles the visibility of a registry section"""
+
+        bl_idname = "api.toggle_ui_section"
+        bl_label = "Toggle Section"
+
+        key: bpy.props.StringProperty()
+
+        def execute(self, context):
+            from .registry import get_registry
+
+            get_registry().toggle_expanded(self.key)
+            return {"FINISHED"}
+
+
 @dataclasses.dataclass
 class APIRegistry:
     """Central registry for managing API functions, hooks, and lifecycles across addons."""
 
     _addons: dict[AddonPath, dict] = dataclasses.field(default_factory=dict)
+    _registered_ui: bool = False
+    _ui_toggles: dict[str, bool] = dataclasses.field(default_factory=dict)
     _runtime_addons: Optional[dict[AddonPath, RuntimeAddon]] = None
 
     _invocation_cache: dict[tuple[str, SystemKey, str], tuple] = dataclasses.field(
@@ -49,6 +75,22 @@ class APIRegistry:
     def invalidate_cache(self):
         self._invocation_cache.clear()
         self._runtime_addons = None
+
+    def register_bpy_ui_props(self):
+        assert HAS_BPY, "Blender Python API not found"
+
+        bpy.utils.register_class(API_OT_ToggleUISection)
+        self._registered_ui = True
+
+    def unregister_bpy_ui_props(self):
+        assert HAS_BPY, "Blender Python API not found"
+        if self._registered_ui:
+            bpy.utils.unregister_class(API_OT_ToggleUISection)
+            self._registered_ui = False
+
+    def toggle_expanded(self, key: str):
+        assert HAS_BPY, "Blender Python API not found"
+        self._ui_toggles[key] = not self._ui_toggles.get(key, True)
 
     # --- Data Parsing Methods ---
 
@@ -567,12 +609,14 @@ class APIRegistry:
             target.addon, error_missing_addon=False
         )
         if not target_addons:
-            return None, "Target system not found"
+            return None, "Target addon not found"
 
+        found_system = False
         for addon in target_addons.values():
             system = addon.systems.get(target.system)
             if not system:
                 continue
+            found_system = True
 
             if target.function in system.functions:
                 return system.functions[target.function].func, None
@@ -583,7 +627,8 @@ class APIRegistry:
                     and h.expose_api_as.version.match(target.version_constraint)
                 ):
                     return h.func, None
-
+        if not found_system:
+            return None, "Target system not found"
         return None, "Target function not found"
 
     def _get_hook_validation_error(self, hook: RuntimeHook):
@@ -972,6 +1017,19 @@ class APIRegistry:
             for a in old.after:
                 self._draw_chain_recursive(layout, a, depth + 1, "AFTER")
 
+    def draw_tab(self, layout: "bpy.types.UILayout", key: str, text: str = None):
+        state = self._ui_toggles.get(key, True)
+        left_side = layout.row(align=True)
+        left_side.alignment = "LEFT"
+        op = left_side.operator(
+            API_OT_ToggleUISection.bl_idname,
+            text=text,
+            icon="TRIA_DOWN" if state else "TRIA_RIGHT",
+            emboss=True,
+        )
+        op.key = key
+        return state
+
     def _draw_execution_chain(
         self,
         layout,
@@ -1028,21 +1086,39 @@ class APIRegistry:
         for hook in system.hooks:
             target_sys_str = self._format_system_name(hook.target.system)
             error = self._get_hook_validation_error(hook)
+
+            key = f"{hook.system.name}.{hook.system.addon.name}.{hook.func.__name__}"
+            hook_icon = {
+                HookType.BEFORE: "◁",
+                HookType.AFTER: "▷",
+                HookType.OVERRIDE: "●",
+            }[hook.hook_type]
             hook_name = {
                 HookType.BEFORE: "Before",
                 HookType.AFTER: "After",
                 HookType.OVERRIDE: "Override",
             }[hook.hook_type]
 
-            text = f"{hook_name} ({hook.func.__name__}) -> {hook.target.addon}:{target_sys_str}:{hook.target.function} {hook.version_constraint}"
+            hook_text = (
+                f"{hook_icon} {hook.func.__name__} ({hook_name} {hook.target.function})"
+            )
+
+            op_layout = hook_col.column()
+            op_layout.alert = error is not None
+            if not self.draw_tab(op_layout, key, hook_text):
+                continue
+
+            box = hook_col.box().column()
+
+            text = f"{hook.target.addon}:{target_sys_str}:{hook.target.function} {hook.version_constraint}"
             if error:
-                hook_col.label(
+                box.label(
                     text=text,
                     icon="ERROR",
                 )
-                hook_col.label(text=f"  Reason: {error}")
+                box.label(text=f"  Reason: {error}")
             else:
-                hook_col.label(text=text)
+                box.label(text=text)
 
     def _draw_system_waiters(self, layout, system: RuntimeSystem):
         if not system.on_ready and not system.on_exit:
@@ -1086,6 +1162,7 @@ class APIRegistry:
 
     def draw_ui(self, layout):
         """Draws a visual representation of the API Registry inside Blender UI."""
+        assert HAS_BPY, "Blender Python API not found"
         addons = self._create_runtime_addons()
         if not addons:
             layout.label(text="No API Addons Registered")
@@ -1097,27 +1174,33 @@ class APIRegistry:
             self._draw_addon(layout, addon_path, addon)
 
 
-def register_registry(reload: bool = False):
+def register_registry(reload: bool = False, with_ui: bool = True):
     """Gets or registers the global API Registry."""
-    existing = sys.modules.get(_GLOBAL_KEY)
+    existing: ModuleType | APIRegistry = sys.modules.get(_GLOBAL_KEY)
 
     if existing is not None and not isinstance(existing, ModuleType):
         if hasattr(existing, "instance_version") and hasattr(existing, "_addons"):
             if MY_VERSION > getattr(existing, "instance_version", 0) or reload:
                 logger.info(f"Refreshed API Registry v{MY_VERSION}")
                 registry = APIRegistry()
-                registry.invalidate_cache()
+                if getattr(existing, "_registered_ui", False):
+                    existing.unregister_bpy_ui_props()
+                if with_ui:
+                    registry.register_bpy_ui_props()
                 registry._addons = getattr(existing, "_addons", {})
+                registry._ui_toggles = getattr(existing, "_ui_toggles", {})
                 sys.modules[_GLOBAL_KEY] = registry  # type: ignore
                 return registry
             return existing  # type: ignore
 
     logger.info(f"Registering API Registry v{MY_VERSION}")
     registry = APIRegistry()
+    if with_ui:
+        registry.register_bpy_ui_props()
     sys.modules[_GLOBAL_KEY] = registry  # type: ignore
     return registry
 
 
 def get_registry():
     """Returns the globally active APIRegistry."""
-    return register_registry()
+    return register_registry(with_ui=False)
