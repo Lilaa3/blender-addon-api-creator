@@ -718,7 +718,11 @@ class APIRegistry:
         for error in errors:
             logger.error(f"Error resolving override for {name}: {error}")
 
-        return chain.main.name, chain.main.system.name, chain.main.system.addon.name
+        return (
+            chain.main.func.__name__ or chain.main.name,
+            chain.main.system.name,
+            chain.main.system.addon.name,
+        )
 
     def _resolve_override(self, active: RuntimeExecutionNode):
         """Finds all valid overrides for a given target API function using runtime structures."""
