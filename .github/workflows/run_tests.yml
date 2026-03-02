@@ -31,7 +31,5 @@ jobs:
 
     - name: Run tests
       run: |
-        # We set PYTHONPATH to the current directory (root) 
-        # so that 'import blender_api_lib' works inside integration.py
         export PYTHONPATH=$PYTHONPATH:.
         pytest tests/
