@@ -146,7 +146,6 @@ def cleanup_step(ctx: APIContext):
 
 ### 7. Yielding and Constraints
 To prevent conflicts between multiple addons trying to override the same function, use `yields_to`. If the "better" addon is present, your override will step aside.
-#### TODO: requires provider logic
 
 ```python
 @api.override(
