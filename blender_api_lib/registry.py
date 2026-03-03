@@ -358,7 +358,6 @@ class APIRegistry:
     def register_addon(
         self, path: AddonPath, name: AddonName, instance_version: int, info: dict
     ):
-        """Registers a new addon in the API Registry."""
         if path in self._addons:
             old_name = self._addons[path]["name"]
             if old_name and old_name != name:
@@ -449,7 +448,7 @@ class APIRegistry:
     def register_exit_callback(
         self, addon_path: AddonPath, system_name: SystemKey, info: dict
     ):
-        """Registers a listener for system shutdown."""
+        """Registers a listener for system exit."""
         for key in {"target", "callback_func"}:
             assert key in info, f"Exit callback missing required key: {key}"
 
@@ -982,7 +981,6 @@ class APIRegistry:
     def _draw_chain_recursive(
         self, layout, chain: RuntimeExecutionChain, depth: int = 0, role: str = "MAIN"
     ):
-        """Recursively draws the execution chain in the UI."""
         prefix = "  " * depth
 
         if role == "BEFORE":
