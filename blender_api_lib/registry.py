@@ -1038,28 +1038,42 @@ class APIRegistry:
         func: RuntimeFunction,
     ):
         """Draws the detailed hook and override execution chain for a specific function."""
+        key = f"chain.{owner_path}.{system_name}.{func.name}"
         box = layout.box()
         row = box.row()
         version = "" if func.version.is_none else f" (v{func.version})"
-        row.label(text=f"{func.name}{version}", icon="NODETREE")
-        if func.is_unstable:
-            unstable_row = row.row()
-            unstable_row.alignment = "RIGHT"
-            unstable_row.label(text="UNSTABLE", icon="ERROR")
 
         try:
             chain, errors = self._start_build_execution_chain(
                 owner_path, system_name, func.name, func.func
             )
         except Exception as exception:
-            box.label(text=f"Error resolving chain: {exception}", icon="ERROR")
-            return
+            chain, errors = RuntimeExecutionChain(), [
+                "Error resolving chain: {exception}"
+            ]
 
-        if not chain.before and not chain.after and not chain.old_main:
+        nothing_to_see = (
+            not chain.before and not chain.after and not chain.old_main and not errors
+        )
+        if errors:
+            row.alert = True
+
+        if nothing_to_see:
+            result = False
+            row.label(text=f"{func.name}{version}")
+        else:
+            result = self.draw_tab(row, key, text=f"{func.name}{version}")
+        if func.is_unstable:
+            unstable_row = row.row()
+            unstable_row.alignment = "RIGHT"
+            unstable_row.label(text="UNSTABLE", icon="ERROR")
+        if not result:
             return
 
         for error in errors:
-            box.label(text=f"Error: {error}", icon="ERROR")
+            error_layout = box.row()
+            error_layout.alert = True
+            error_layout.label(text=error, icon="ERROR")
 
         chain_col = box.column(align=True)
         self._draw_chain_recursive(chain_col, chain)
@@ -1087,7 +1101,9 @@ class APIRegistry:
             target_sys_str = self._format_system_name(hook.target.system)
             error = self._get_hook_validation_error(hook)
 
-            key = f"{hook.system.name}.{hook.system.addon.name}.{hook.func.__name__}"
+            key = (
+                f"hook.{hook.system.name}.{hook.system.addon.name}.{hook.func.__name__}"
+            )
             hook_icon = {
                 HookType.BEFORE: "◁",
                 HookType.AFTER: "▷",
@@ -1096,21 +1112,24 @@ class APIRegistry:
 
             hook_text = f"{hook_icon} {hook.func.__name__} ({hook.target.function})"
 
-            op_layout = hook_col.box().column()
+            box = hook_col.box().column()
+            op_layout = box.row()
             op_layout.alert = error is not None
             if not self.draw_tab(op_layout, key, hook_text):
                 continue
 
-            op_layout.label(
+            box.label(
                 text=f"Target System: {hook.target.addon}:{target_sys_str}",
                 icon="LINKED",
             )
-            op_layout.label(
+            box.label(
                 text=f"Target Function: {hook.target.function} {hook.version_constraint}",
                 icon="SCRIPT",
             )
             if error:
-                op_layout.label(text=f"  Reason: {error}")
+                error_layout = box.row()
+                error_layout.alert = True
+                error_layout.label(text=error, icon="ERROR")
 
     def _draw_system_waiters(self, layout, system: RuntimeSystem):
         if not system.on_ready and not system.on_exit:

@@ -32,7 +32,7 @@ class APIVersion:
     def __str__(self):
         if self.is_none:
             return "None"
-        return f"{self.major}.{self.minor}.{self.patch}"
+        return f"{self.major or 0}.{self.minor or 0}.{self.patch or 0}"
 
     def __repr__(self):
         return f"APIVersion({self.__str__()})"
