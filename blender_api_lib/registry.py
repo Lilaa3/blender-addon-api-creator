@@ -977,7 +977,7 @@ class APIRegistry:
     # --- UI Drawing Methods ---
 
     def _format_system_name(self, system_name: SystemKey):
-        return ".".join(system_name) if system_name else "default"
+        return ".".join(system_name) if system_name else ""
 
     def _draw_chain_recursive(
         self, layout, chain: RuntimeExecutionChain, depth: int = 0, role: str = "MAIN"
@@ -1025,7 +1025,7 @@ class APIRegistry:
             API_OT_ToggleUISection.bl_idname,
             text=text,
             icon="TRIA_DOWN" if state else "TRIA_RIGHT",
-            emboss=True,
+            emboss=False,
         )
         op.key = key
         return state
@@ -1093,32 +1093,24 @@ class APIRegistry:
                 HookType.AFTER: "▷",
                 HookType.OVERRIDE: "●",
             }[hook.hook_type]
-            hook_name = {
-                HookType.BEFORE: "Before",
-                HookType.AFTER: "After",
-                HookType.OVERRIDE: "Override",
-            }[hook.hook_type]
 
-            hook_text = (
-                f"{hook_icon} {hook.func.__name__} ({hook_name} {hook.target.function})"
-            )
+            hook_text = f"{hook_icon} {hook.func.__name__} ({hook.target.function})"
 
-            op_layout = hook_col.column()
+            op_layout = hook_col.box().column()
             op_layout.alert = error is not None
             if not self.draw_tab(op_layout, key, hook_text):
                 continue
 
-            box = hook_col.box().column()
-
-            text = f"{hook.target.addon}:{target_sys_str}:{hook.target.function} {hook.version_constraint}"
+            op_layout.label(
+                text=f"Target System: {hook.target.addon}:{target_sys_str}",
+                icon="LINKED",
+            )
+            op_layout.label(
+                text=f"Target Function: {hook.target.function} {hook.version_constraint}",
+                icon="SCRIPT",
+            )
             if error:
-                box.label(
-                    text=text,
-                    icon="ERROR",
-                )
-                box.label(text=f"  Reason: {error}")
-            else:
-                box.label(text=text)
+                op_layout.label(text=f"  Reason: {error}")
 
     def _draw_system_waiters(self, layout, system: RuntimeSystem):
         if not system.on_ready and not system.on_exit:
@@ -1144,9 +1136,15 @@ class APIRegistry:
         system_box = layout.box()
         header_row = system_box.row()
         header_row.label(
-            text=f"System: {self._format_system_name(system_name)}", icon="PREFERENCES"
+            text="Default System"
+            if system_name is None
+            else f"System: {self._format_system_name(system_name)}",
+            icon="PREFERENCES",
         )
-        header_row.label(text="Ready" if system.ready else "Pending")
+        if system.ready:
+            header_row_right = header_row.row(align=True)
+            header_row_right.alignment = "RIGHT"
+            header_row_right.label(text="Marked ready")
 
         self._draw_system_functions(system_box, addon_path, system_name, system)
         self._draw_system_hooks(system_box, system)
