@@ -997,8 +997,9 @@ class APIRegistry:
                 self._draw_chain_recursive(layout, b, depth + 1, "BEFORE")
 
             sys_str = self._format_system_name(old.main.system.name)
+            version = "" if old.main.version.is_none else f" (v{old.main.version})"
             layout.label(
-                text=f"{prefix} ∅ [Replaced] {old.main.system.addon.name}:{sys_str}.{old.main.name or old.main.func.__name__} (v {old.main.version})",
+                text=f"{prefix} ∅ [Replaced] {old.main.system.addon.name}:{sys_str}.{old.main.name or old.main.func.__name__}{version}",
             )
 
         for b in chain.before:
@@ -1006,8 +1007,9 @@ class APIRegistry:
 
         node = chain.main
         sys_str = self._format_system_name(node.system.name)
+        version = "" if node.version.is_none else f" (v{node.version})"
         layout.label(
-            text=f"{prefix}{label_prefix}{node.system.addon.name}:{sys_str}.{node.name or node.func.__name__} (v {node.version})"
+            text=f"{prefix}{label_prefix}{node.system.addon.name}:{sys_str}.{node.name or node.func.__name__}{version}"
         )
 
         for a in chain.after:
