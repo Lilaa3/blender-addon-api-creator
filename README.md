@@ -1,6 +1,6 @@
 # Blender Addon API Framework
-#### A simplified addon extension api, similar in concept to the glTF 2's extension capabilities but more robust, expendable, versioned and including cross-extension support.
-This was written with the intention of using it in [Fast64](https://github.com/Fast-64/Fast64) but it can be used for other addons as well.
+#### A simplified addon extension api, similar in concept to the glTF 2's extension capabilities but more robust, expendable, versioned and including cross-addon-communication support.
+This was written with the intention of using it in [Fast64](https://github.com/Fast-64/Fast64) once robust or in a seperate branch, but it can be used for other addons as well.
 
 ## Installation
 
