@@ -2,6 +2,10 @@
 #### A simplified addon extension api, similar in concept to the glTF 2's extension capabilities but more robust, expendable, versioned and including cross-addon-communication support.
 This was written with the intention of using it in [Fast64](https://github.com/Fast-64/Fast64) once robust or in a seperate branch, but it can be used for other addons as well.
 
+> [!WARNING]
+> This project is still in early development, it is NOT ready to be used.
+> Breaking changes are accepted for now. Even if the registry should be minimally changed from now on.
+
 ## Installation
 
 - **The easy way**:
