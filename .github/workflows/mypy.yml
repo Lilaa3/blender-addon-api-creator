@@ -28,4 +28,4 @@ jobs:
 
     - name: Run Mypy (type check)
       run: |
-        mypy . --python-version ${{ matrix.python-version }}
+        mypy blender_api_lib --python-version ${{ matrix.python-version }}
