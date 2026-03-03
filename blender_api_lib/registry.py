@@ -46,7 +46,7 @@ if HAS_BPY:
         bl_idname = "api.toggle_ui_section"
         bl_label = "Toggle Section"
 
-        key: bpy.props.StringProperty()
+        key: bpy.props.StringProperty  # type: ignore[misc]
 
         def execute(self, context):
             from .registry import get_registry
@@ -863,7 +863,7 @@ class APIRegistry:
         )
 
         chain = RuntimeExecutionChain(main=active)
-        errors = []
+        errors: list[str] = []
         self._build_execution_chain(chain, errors)
         return chain, errors
 
@@ -1017,7 +1017,9 @@ class APIRegistry:
             for a in old.after:
                 self._draw_chain_recursive(layout, a, depth + 1, "AFTER")
 
-    def draw_tab(self, layout: "bpy.types.UILayout", key: str, text: str = None):
+    def draw_tab(
+        self, layout: "bpy.types.UILayout", key: str, text: Optional[str] = None
+    ):
         state = self._ui_toggles.get(key, True)
         left_side = layout.row(align=True)
         left_side.alignment = "LEFT"
@@ -1193,7 +1195,7 @@ class APIRegistry:
 
 def register_registry(reload: bool = False, with_ui: bool = True):
     """Gets or registers the global API Registry."""
-    existing: ModuleType | APIRegistry = sys.modules.get(_GLOBAL_KEY)
+    existing: Optional[ModuleType | APIRegistry] = sys.modules.get(_GLOBAL_KEY)
 
     if existing is not None and not isinstance(existing, ModuleType):
         if hasattr(existing, "instance_version") and hasattr(existing, "_addons"):

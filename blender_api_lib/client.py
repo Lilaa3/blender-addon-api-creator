@@ -1,7 +1,7 @@
 import dataclasses
 import logging
 from types import ModuleType
-from typing import Optional, Callable
+from typing import Any, Optional, Callable
 from .registry import get_registry
 from .api_types import (
     APIVersion,
@@ -300,7 +300,7 @@ def get_system_module(name: AddonName, system_name: SystemKey) -> Optional[Modul
 @dataclasses.dataclass
 class APIAddon:
     name: AddonName
-    bl_info: dict[str, any]
+    bl_info: dict[str, Any]
     addon_path: AddonPath = None
     systems: dict[SystemKey, APISystem] = dataclasses.field(default_factory=dict)
 

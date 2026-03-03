@@ -2,13 +2,17 @@ name: Black Lint
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
 
 jobs:
-  test:
+  lint:
+    name: Run linting
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.14"]
 
     steps:
     - name: Checkout code

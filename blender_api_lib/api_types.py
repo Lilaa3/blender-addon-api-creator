@@ -1,6 +1,6 @@
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 from types import ModuleType
 
 
@@ -95,17 +95,17 @@ class APIContext:
 
     api_name: str
     calling_addon: str
-    args: list[any]
-    kwargs: dict[str, any]
-    arguments: dict[str, any] = field(default_factory=dict)
-    _store: dict[str, any] = field(default_factory=dict)
+    args: list[Any]
+    kwargs: dict[str, Any]
+    arguments: dict[str, Any] = field(default_factory=dict)
+    _store: dict[str, Any] = field(default_factory=dict)
 
     active_addon: str = ""
     active_system: SystemKey = None
     active_function: str = ""
     is_main: bool = False
 
-    def get_data(self, key: str) -> Optional[any]:
+    def get_data(self, key: str) -> Optional[Any]:
         """Retrieves data stored in the context by hooks."""
         return self._store.get(key)
 
@@ -193,7 +193,7 @@ class RuntimeHook:
     hook_type: HookType
     version_constraint: str = ">=1.0"
     yields_to: list[RuntimeTargetFunction] = field(default_factory=list)
-    requires_provider: list[RuntimeTargetAddon] = None
+    requires_provider: list[RuntimeTargetAddon] = field(default_factory=list)
     expose_api_as: Optional[RuntimeExposedHook] = None
 
 
