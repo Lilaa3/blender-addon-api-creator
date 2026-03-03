@@ -3,7 +3,7 @@ import sys
 from . import utils
 
 from .blender_api_lib.registry import register_registry
-from .blender_api_lib.types import APIVersion
+from .blender_api_lib.api_types import APIVersion
 from .blender_api_lib.client import (
     get_or_create_system,
     register_addon,

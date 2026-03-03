@@ -83,7 +83,7 @@ api = get_or_create_system(None)
 To expose a function from your addon so that other addons can hook into it or override it, use the `@api.function` decorator.
 
 ```python
-from .blender_api_lib.types import APIVersion
+from .blender_api_lib.api_types import APIVersion
 
 @api.function("do_math", APIVersion(1, 0, 0))
 def do_math(a: int, b: int) -> int:
@@ -107,7 +107,7 @@ def my_custom_math(a: int, b: int):
 #### Style B: API Context
 Use this if you need metadata (who called the function) or need to pass data between hooks. Use `ctx.get_args` to safely retrieve parameters by name regardless of how they were passed.
 ```python
-from .blender_api_lib.types import APIContext
+from .blender_api_lib.api_types import APIContext
 
 @api.override(target=RuntimeTargetFunction("HostAddon", "do_math", ("Math", "Core")))
 def my_custom_math(ctx: APIContext):
@@ -164,7 +164,7 @@ This can be used, for example, to add properties to PropertyGroups.
 These will still run if the consumer is registered after or before the host, meaning there is no worry over addon instalation order like typical methods!
 
 ```python
-from .blender_api_lib.types import RuntimeTargetAddon
+from .blender_api_lib.api_types import RuntimeTargetAddon
 
 @api.on_ready(RuntimeTargetAddon("HostAddon", ("Math", "Core")))
 def on_host_ready():

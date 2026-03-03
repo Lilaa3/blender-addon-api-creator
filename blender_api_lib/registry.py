@@ -12,7 +12,7 @@ import dataclasses
 from types import ModuleType
 from typing import NamedTuple, Optional, Callable
 
-from .types import (
+from .api_types import (
     APIVersion,
     AddonPath,
     AddonName,

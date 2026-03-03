@@ -1,4 +1,4 @@
-from .blender_api_lib.types import (
+from .blender_api_lib.api_types import (
     APIContext,
     RuntimeTargetFunction,
     RuntimeTargetAddon,

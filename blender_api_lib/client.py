@@ -3,7 +3,7 @@ import logging
 from types import ModuleType
 from typing import Optional, Callable
 from .registry import get_registry
-from .types import (
+from .api_types import (
     APIVersion,
     AddonName,
     AddonPath,

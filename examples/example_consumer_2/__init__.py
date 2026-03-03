@@ -1,4 +1,4 @@
-from .blender_api_lib.types import APIContext, RuntimeTargetFunction
+from .blender_api_lib.api_types import APIContext, RuntimeTargetFunction
 
 from .blender_api_lib.client import (
     get_or_create_system,

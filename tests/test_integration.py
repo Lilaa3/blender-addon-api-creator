@@ -2,7 +2,7 @@ import sys
 import pytest
 
 from blender_api_lib import client, registry
-from blender_api_lib.types import (
+from blender_api_lib.api_types import (
     APIContext,
     RuntimeTargetFunction,
     RuntimeTargetAddon,
