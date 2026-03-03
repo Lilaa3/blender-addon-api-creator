@@ -154,7 +154,7 @@ To prevent conflicts between multiple addons trying to override the same functio
 ```python
 @api.override(
     target=RuntimeTargetFunction("HostAddon", "do_math", ("Math", "Core")),
-    version=">=1.0",
+    version_constraint=">=1.0",
     requires_provider="OptionalDependency",
     yields_to=[RuntimeTargetFunction("ProMathAddon", "do_math")]
 )
