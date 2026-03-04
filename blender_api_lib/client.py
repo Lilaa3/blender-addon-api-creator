@@ -301,11 +301,12 @@ class APISystem:
                         )
                         continue
 
-                    if (
-                        inspect.ismodule(obj)
-                        and getattr(member, "__module__", None) != obj.__name__
-                    ):
-                        continue
+                    if inspect.ismodule(obj):
+                        if getattr(member, "__module__", None) != obj.__name__:
+                            continue
+                    elif inspect.isclass(obj):
+                        if name not in obj.__dict__:
+                            continue
 
                     descriptor = obj.__dict__.get(name, member)
                     _safe_wrap(obj, name, api_name, descriptor, member)
