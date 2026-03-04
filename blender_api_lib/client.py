@@ -1,5 +1,7 @@
 import dataclasses
 import logging
+import inspect
+import fnmatch
 from types import ModuleType
 from typing import Any, Optional, Callable
 from .registry import get_registry
@@ -44,6 +46,7 @@ class APISystem:
     _expose_all_originals: list[tuple[object, str, object]] = dataclasses.field(
         default_factory=list
     )
+    _expose_all_visited: set = dataclasses.field(default_factory=set)
 
     def __post_init__(self):
         if not self._addon_path:
@@ -69,6 +72,7 @@ class APISystem:
 
     def unregister_system(self):
         self._restore_expose_all_originals()
+        self._expose_all_visited.clear()
         get_registry().unregister_system(self._addon_path, self.system_name)
 
     def _restore_expose_all_originals(self):
@@ -244,7 +248,7 @@ class APISystem:
         import fnmatch
 
         exclude_list = exclude if exclude else []
-        visited_ids = set()
+        visited_ids = self._expose_all_visited
 
         base_package = None
         if inspect.ismodule(target):
@@ -290,9 +294,16 @@ class APISystem:
                     continue
 
                 if inspect.isfunction(member) or inspect.ismethod(member):
+                    if inspect.ismodule(obj):
+                        if getattr(member, "__module__", None) != obj.__name__:
+                            continue
+                    elif inspect.isclass(obj):
+                        if name not in obj.__dict__:
+                            continue
+
                     # Skip already-wrapped API functions — they belong to a previous
-                    # registration that wasn't cleaned up, which should not happen after
-                    # the fix but guard anyway.
+                    # registration that wasn't cleaned up, or are already exposed
+                    # via a different path on this system.
                     if getattr(member, "__is_api_wrapper__", False):
                         logger.warning(
                             f"expose_all: {obj!r}.{name} is already an API wrapper "
@@ -300,13 +311,6 @@ class APISystem:
                             "restore the original?"
                         )
                         continue
-
-                    if inspect.ismodule(obj):
-                        if getattr(member, "__module__", None) != obj.__name__:
-                            continue
-                    elif inspect.isclass(obj):
-                        if name not in obj.__dict__:
-                            continue
 
                     descriptor = obj.__dict__.get(name, member)
                     _safe_wrap(obj, name, api_name, descriptor, member)
