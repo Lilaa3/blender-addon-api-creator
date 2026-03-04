@@ -21,7 +21,7 @@ api = get_or_create_system(None)
 
 
 @api.hook(target=RuntimeTargetFunction("ConsumerAddon", "do_multiply"))
-def hi(ctx: APIContext) -> int:
+def hi(ctx: APIContext):
     print("Hi, I target a specific override")
 
 
@@ -29,7 +29,7 @@ def hi(ctx: APIContext) -> int:
     target=RuntimeTargetFunction("HostAddon", "do_math", ("Math", "Core")),
     when="before",
 )
-def hi_old(a: int, b: int) -> int:
+def hi_old(a: int, b: int):
     print("Hi, I target the original function")
 
 
@@ -39,7 +39,7 @@ def hi_old(a: int, b: int) -> int:
     ),
     when="before",
 )
-def before_execute(a: int, b: int) -> int:
+def before_execute(a: int, b: int):
     print("Hi, I target an unstable function")
 
 

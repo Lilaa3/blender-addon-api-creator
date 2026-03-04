@@ -35,8 +35,8 @@ class API_OT_DoMath(bpy.types.Operator):
     bl_idname = "api.do_math"
     bl_label = "Do Math"
 
-    a: bpy.props.IntProperty(name="A", default=3)
-    b: bpy.props.IntProperty(name="B", default=2)
+    a: bpy.props.IntProperty(name="A", default=3)  # type: ignore[valid-type]
+    b: bpy.props.IntProperty(name="B", default=2)  # type: ignore[valid-type]
 
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self)

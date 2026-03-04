@@ -46,7 +46,7 @@ if HAS_BPY:
         bl_idname = "api.toggle_ui_section"
         bl_label = "Toggle Section"
 
-        key: bpy.props.StringProperty  # type: ignore[misc]
+        key: bpy.props.StringProperty()  # type: ignore[valid-type]
 
         def execute(self, context):
             from .registry import get_registry
@@ -537,6 +537,7 @@ class APIRegistry:
             if len(addons) > 2:
                 logger.warning(f"Multiple addons under the same name {name}")
         else:
+            assert path is not None
             addons = [self._get_runtime_addon(path)]
 
         found_system = False

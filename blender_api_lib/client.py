@@ -39,7 +39,7 @@ class APISystem:
     _pending_waiters: list[dict] = dataclasses.field(default_factory=list)
     _pending_exits: list[dict] = dataclasses.field(default_factory=list)
     _pending_expose_module: dict | None = None
-    _addon_path: AddonPath = None
+    _addon_path: AddonPath | None = None
     # (obj, attr_name, original) for every setattr done by expose_all
     _expose_all_originals: list[tuple[object, str, object]] = dataclasses.field(
         default_factory=list
@@ -142,9 +142,9 @@ class APISystem:
             )
 
             wrapper = env["wrapper"]
-            wrapper.__name__ = func.__name__
-            wrapper.__doc__ = func.__doc__
-            wrapper.__is_api_wrapper__ = True
+            wrapper.__name__ = func.__name__  # type: ignore[attr-defined]
+            wrapper.__doc__ = func.__doc__  # type: ignore[attr-defined]
+            wrapper.__is_api_wrapper__ = True  # type: ignore[attr-defined]
 
             return wrapper
 
@@ -346,7 +346,7 @@ def get_system_module(name: AddonName, system_name: SystemKey) -> Optional[Modul
 class APIAddon:
     name: AddonName
     bl_info: dict[str, Any]
-    addon_path: AddonPath = None
+    addon_path: AddonPath | None = None
     systems: dict[SystemKey, APISystem] = dataclasses.field(default_factory=dict)
 
     def __post_init__(self):
@@ -368,6 +368,7 @@ class APIAddon:
     def register_system(self, system: APISystem):
         self.systems[system.system_name] = system
 
+        assert self.addon_path is not None
         logger.info(f"Registering {self.addon_path}:{system.system_name}")
         system.register_contents(self.addon_path)
         return system
@@ -416,7 +417,7 @@ def register_system(system: SystemKey | APISystem):
     if not isinstance(system, APISystem):
         system = get_or_create_system(system)
 
-    return API_ADDON_SINGLETON.register_system(system)
+    return API_ADDON_SINGLETON.register_system(system)  # type: ignore[arg-type]
 
 
 def unregister_system(system: SystemKey | APISystem):
