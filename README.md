@@ -18,9 +18,9 @@ This was written with the intention of using it in [Fast64](https://github.com/F
 
   1. [Install git](https://git-scm.com/install/)
   2. Open a terminal in your addon’s root folder.
-  3. Add `blender_api_lib` as a submodule:
+  3. Add `blender-addon-api-creator` as a submodule:
      ```bash
-     git submodule add https://github.com/Lilaa3/blender_api_lib blender_api_lib
+     git submodule add https://github.com/Lilaa3/blender-addon-api-creator blender_api_lib
      ```
 
   4. Initialize and install the submodule:
