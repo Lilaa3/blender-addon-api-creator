@@ -127,13 +127,17 @@ class APISystem:
                 else:
                     args_parts.append(arg)
             args_str = ", ".join(args_parts)
-            sig_str = f"{args_str}, *args, **kwargs" if args_str else "*args, **kwargs"
+            sig_str = (
+                f"{args_str}, *_wrapper_args, **_wrapper_kwargs"
+                if args_str
+                else "*_wrapper_args, **_wrapper_kwargs"
+            )
             # For the call-through we pass only bare names (no default expressions)
             call_args_str = ", ".join(args_list)
             call_sig_str = (
-                f"{call_args_str}, *args, **kwargs"
+                f"{call_args_str}, *_wrapper_args, **_wrapper_kwargs"
                 if call_args_str
-                else "*args, **kwargs"
+                else "*_wrapper_args, **_wrapper_kwargs"
             )
 
             exec(
