@@ -972,9 +972,11 @@ class APIRegistry:
                 if is_main:
                     ctx.set_data("result", res)
             except Exception as exception:
+                if func is original_func:
+                    raise exception
                 phase_name = "active" if is_main else "hook"
                 raise RuntimeError(
-                    f"Exception in {phase_name} function {step_name} of {addon_name}"
+                    f"Exception in {phase_name} function {step_name} of {addon_name}: {exception}"
                 ) from exception
 
         return ctx.get_data("result")
