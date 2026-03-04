@@ -361,9 +361,13 @@ class APIRegistry:
         if path in self._addons:
             old_name = self._addons[path]["name"]
             if old_name and old_name != name:
-                logger.info(f"API addon {path} changing name from {old_name} to {name}")
+                logger.info(
+                    f"API addon {path} changing name from {old_name} to {name}. Re-registering."
+                )
             else:
                 logger.info(f"API addon {path} already registered. Re-registering.")
+
+            self.unregister_addon(path)
 
         self._addons[path] = {
             "name": name,
@@ -382,6 +386,7 @@ class APIRegistry:
             logger.warning(
                 f"System {addon_path}:{system_name} already registered. Re-registering."
             )
+            self.unregister_system(addon_path, system_name)
 
         addon = self._get_addon(addon_path)
         addon["systems"][system_name] = {
@@ -722,7 +727,7 @@ class APIRegistry:
         if not required:
             return True
         return all(
-            len(self._get_runtime_systems(addon.name, addon.system, False, False)) > 0
+            len(self._get_runtime_systems(addon.addon, addon.system, False, False)) > 0
             for addon in required
         )
 
@@ -1050,13 +1055,11 @@ class APIRegistry:
                 owner_path, system_name, func.name, func.func
             )
         except Exception as exception:
-            chain, errors = RuntimeExecutionChain(), [
-                "Error resolving chain: {exception}"
-            ]
+            chain, errors = None, ["Error resolving chain: {exception}"]
 
         nothing_to_see = (
-            not chain.before and not chain.after and not chain.old_main and not errors
-        )
+            chain and not chain.before and not chain.after and not chain.old_main
+        ) and not errors
         if errors:
             row.alert = True
 

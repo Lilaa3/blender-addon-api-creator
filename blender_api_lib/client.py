@@ -40,6 +40,10 @@ class APISystem:
     _pending_exits: list[dict] = dataclasses.field(default_factory=list)
     _pending_expose_module: dict | None = None
     _addon_path: AddonPath = None
+    # (obj, attr_name, original) for every setattr done by expose_all
+    _expose_all_originals: list[tuple[object, str, object]] = dataclasses.field(
+        default_factory=list
+    )
 
     def __post_init__(self):
         if not self._addon_path:
@@ -64,7 +68,20 @@ class APISystem:
             )
 
     def unregister_system(self):
+        self._restore_expose_all_originals()
         get_registry().unregister_system(self._addon_path, self.system_name)
+
+    def _restore_expose_all_originals(self):
+        """Reverse every setattr made by expose_all, restoring the class/module to its
+        pre-wrap state so a subsequent expose_all (addon reload) works correctly."""
+        for obj, attr_name, original in self._expose_all_originals:
+            try:
+                setattr(obj, attr_name, original)
+            except Exception as exc:
+                logger.warning(
+                    f"expose_all restore failed for {obj!r}.{attr_name}: {exc}"
+                )
+        self._expose_all_originals.clear()
 
     def function(
         self,
@@ -87,8 +104,7 @@ class APISystem:
 
             # Hack: Mimic the exact positional argument count for Blender's strict C-level checks
             args_list = func.__code__.co_varnames[: func.__code__.co_argcount]
-            args_str = ", ".join(args_list)
-            sig_str = f"{args_str}, *args, **kwargs" if args_str else "*args, **kwargs"
+            defaults = func.__defaults__ or ()
 
             env = {
                 "_wrapper_invoke_api": invoke_api,
@@ -97,8 +113,31 @@ class APISystem:
                 "_wrapper_func_name": name,
                 "_wrapper_func": func,
             }
+
+            # Align defaults to the tail of args_list (same as CPython's own rule)
+            n_without_defaults = len(args_list) - len(defaults)
+            args_parts = []
+            for i, arg in enumerate(args_list):
+                default_index = i - n_without_defaults
+                if default_index >= 0:
+                    default_val = defaults[default_index]
+                    env_key = f"_default_{arg}"
+                    env[env_key] = default_val
+                    args_parts.append(f"{arg}={env_key}")
+                else:
+                    args_parts.append(arg)
+            args_str = ", ".join(args_parts)
+            sig_str = f"{args_str}, *args, **kwargs" if args_str else "*args, **kwargs"
+            # For the call-through we pass only bare names (no default expressions)
+            call_args_str = ", ".join(args_list)
+            call_sig_str = (
+                f"{call_args_str}, *args, **kwargs"
+                if call_args_str
+                else "*args, **kwargs"
+            )
+
             exec(
-                f"def wrapper({sig_str}): return _wrapper_invoke_api(_wrapper_system._addon_path, _wrapper_system_name, _wrapper_func_name, _wrapper_func, {sig_str})",
+                f"def wrapper({sig_str}): return _wrapper_invoke_api(_wrapper_system._addon_path, _wrapper_system_name, _wrapper_func_name, _wrapper_func, {call_sig_str})",
                 env,
             )
 
@@ -189,10 +228,13 @@ class APISystem:
         recursive: bool = True,
         exclude: Optional[list[str]] = None,
         starting_prefix: str = "",
+        hide_private: bool = True,
     ):
         """
         Automatically expose all functions and methods within a target module or class.
         By default, sets `unstable=True` to flag these automated endpoints safely.
+
+        Every change is recorded in _expose_all_originals
         """
         import inspect
         import fnmatch
@@ -206,30 +248,53 @@ class APISystem:
         elif hasattr(target, "__module__") and target.__module__:
             base_package = target.__module__.split(".")[0]
 
+        def _safe_wrap(obj, attr_name, api_name, descriptor, member):
+            """Wrap one attribute and record the original so it can be restored."""
+            try:
+                if isinstance(descriptor, classmethod):
+                    base_func = descriptor.__func__
+                    wrapped = self.function(api_name, unstable=unstable)(base_func)
+                    self._expose_all_originals.append((obj, attr_name, descriptor))
+                    setattr(obj, attr_name, classmethod(wrapped))
+                elif isinstance(descriptor, staticmethod):
+                    base_func = descriptor.__func__
+                    wrapped = self.function(api_name, unstable=unstable)(base_func)
+                    self._expose_all_originals.append((obj, attr_name, descriptor))
+                    setattr(obj, attr_name, staticmethod(wrapped))
+                elif isinstance(descriptor, property):
+                    return  # properties are skipped
+                else:
+                    wrapped = self.function(api_name, unstable=unstable)(member)
+                    self._expose_all_originals.append((obj, attr_name, member))
+                    setattr(obj, attr_name, wrapped)
+            except (TypeError, AttributeError) as exc:
+                logger.warning(f"expose_all could not wrap {obj!r}.{attr_name}: {exc}")
+
         def _traverse(obj, prefix=""):
             if id(obj) in visited_ids:
                 return
             visited_ids.add(id(obj))
 
             for name, member in inspect.getmembers(obj):
-                if name.startswith("_"):
+                if name.startswith("_") and hide_private:
                     continue
 
                 full_name = f"{prefix}{name}"
                 api_name = f"{starting_prefix}{full_name}"
 
-                is_excluded = False
-                for pat in exclude_list:
-                    if fnmatch.fnmatch(api_name, pat):
-                        is_excluded = True
-                        break
-
-                if is_excluded:
+                if any(fnmatch.fnmatch(api_name, pat) for pat in exclude_list):
                     continue
 
                 if inspect.isfunction(member) or inspect.ismethod(member):
-                    # Skip already wrapped API functions
+                    # Skip already-wrapped API functions — they belong to a previous
+                    # registration that wasn't cleaned up, which should not happen after
+                    # the fix but guard anyway.
                     if getattr(member, "__is_api_wrapper__", False):
+                        logger.warning(
+                            f"expose_all: {obj!r}.{name} is already an API wrapper "
+                            "and will be skipped. Did a previous unregister fail to "
+                            "restore the original?"
+                        )
                         continue
 
                     if (
@@ -238,28 +303,8 @@ class APISystem:
                     ):
                         continue
 
-                    try:
-                        descriptor = obj.__dict__.get(name, member)
-
-                        if isinstance(descriptor, classmethod):
-                            base_func = descriptor.__func__
-                            wrapped = self.function(api_name, unstable=unstable)(
-                                base_func
-                            )
-                            setattr(obj, name, classmethod(wrapped))
-                        elif isinstance(descriptor, staticmethod):
-                            base_func = descriptor.__func__
-                            wrapped = self.function(api_name, unstable=unstable)(
-                                base_func
-                            )
-                            setattr(obj, name, staticmethod(wrapped))
-                        elif isinstance(descriptor, property):
-                            continue
-                        else:
-                            wrapped = self.function(api_name, unstable=unstable)(member)
-                            setattr(obj, name, wrapped)
-                    except (TypeError, AttributeError):
-                        pass
+                    descriptor = obj.__dict__.get(name, member)
+                    _safe_wrap(obj, name, api_name, descriptor, member)
 
                 elif inspect.isclass(member) and recursive:
                     # Skip imported classes in modules
@@ -315,6 +360,8 @@ class APIAddon:
         )
 
     def unregister_addon(self):
+        for system in self.systems.values():
+            system.unregister_system()
         registry = get_registry()
         registry.unregister_addon(self.addon_path)
 
