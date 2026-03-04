@@ -195,3 +195,9 @@ host_mod = get_system_module("HostAddon", system_name=("Math", "Core"))
 if host_mod:
     print(host_mod.SOME_CONSTANT)
 ```
+
+### 10. Expose all
+
+DO NOT USE IN THE __init__ function.
+expose_all allows the user to automatically wrap a given module in function api wrappers.
+By default these are marked as unstable, they can have a prefix appended at the beggining (some form of "unstable." is recommended) and skip names by wildcarding (for example blender_api_lib*) in the exclude argument.
