@@ -3,7 +3,7 @@ import logging
 import inspect
 import fnmatch
 from types import ModuleType
-from typing import Any, Optional, Callable
+from typing import Any, Optional, Callable, cast
 from .registry import get_registry
 from .api_types import (
     APIVersion,
@@ -17,6 +17,8 @@ from .api_types import (
 )
 
 logger = logging.getLogger(__name__)
+
+ExposeAs = RuntimeExposedHook | tuple | str | bool
 
 
 def invoke_api(
@@ -87,16 +89,71 @@ class APISystem:
                 )
         self._expose_all_originals.clear()
 
+    def _wrap_func(self, func: Callable, api_name: str):
+        """Wraps a function to invoke the API chain when called."""
+        system_name = self.system_name
+
+        # Hack: Mimic the exact positional argument count for Blender's strict C-level checks
+        args_list = func.__code__.co_varnames[: func.__code__.co_argcount]
+        defaults = func.__defaults__ or ()
+
+        env = {
+            "_wrapper_invoke_api": invoke_api,
+            "_wrapper_system": self,
+            "_wrapper_system_name": system_name,
+            "_wrapper_func_name": api_name,
+            "_wrapper_func": func,
+        }
+
+        # Align defaults to the tail of args_list (same as CPython's own rule)
+        n_without_defaults = len(args_list) - len(defaults)
+        args_parts = []
+        for i, arg in enumerate(args_list):
+            default_index = i - n_without_defaults
+            if default_index >= 0:
+                default_val = defaults[default_index]
+                env_key = f"_default_{arg}"
+                env[env_key] = default_val
+                args_parts.append(f"{arg}={env_key}")
+            else:
+                args_parts.append(arg)
+        args_str = ", ".join(args_parts)
+        sig_str = (
+            f"{args_str}, *_wrapper_args, **_wrapper_kwargs"
+            if args_str
+            else "*_wrapper_args, **_wrapper_kwargs"
+        )
+        # For the call-through we pass only bare names (no default expressions)
+        call_args_str = ", ".join(args_list)
+        call_sig_str = (
+            f"{call_args_str}, *_wrapper_args, **_wrapper_kwargs"
+            if call_args_str
+            else "*_wrapper_args, **_wrapper_kwargs"
+        )
+
+        exec(
+            f"def wrapper({sig_str}): return _wrapper_invoke_api(_wrapper_system._addon_path, _wrapper_system_name, _wrapper_func_name, _wrapper_func, {call_sig_str})",
+            env,
+        )
+
+        wrapper = cast(Callable, env["wrapper"])
+        wrapper.__name__ = func.__name__  # type: ignore[attr-defined]
+        wrapper.__doc__ = func.__doc__  # type: ignore[attr-defined]
+        wrapper.__is_api_wrapper__ = True  # type: ignore[attr-defined]
+
+        return wrapper
+
     def function(
         self,
-        name: str,
+        name: str | Callable | None = None,
         version: APIVersion = APIVersion(),
         unstable: bool = False,
     ):
         def decorator(func: Callable):
+            actual_name = name if isinstance(name, str) else func.__name__
             self._pending_functions.append(
                 {
-                    "name": name,
+                    "name": actual_name,
                     "func": func,
                     "version": version.to_tuple(),
                     "docs": func.__doc__ or "",
@@ -104,57 +161,12 @@ class APISystem:
                 }
             )
 
-            system_name = self.system_name
+            return self._wrap_func(func, actual_name)
 
-            # Hack: Mimic the exact positional argument count for Blender's strict C-level checks
-            args_list = func.__code__.co_varnames[: func.__code__.co_argcount]
-            defaults = func.__defaults__ or ()
-
-            env = {
-                "_wrapper_invoke_api": invoke_api,
-                "_wrapper_system": self,
-                "_wrapper_system_name": system_name,
-                "_wrapper_func_name": name,
-                "_wrapper_func": func,
-            }
-
-            # Align defaults to the tail of args_list (same as CPython's own rule)
-            n_without_defaults = len(args_list) - len(defaults)
-            args_parts = []
-            for i, arg in enumerate(args_list):
-                default_index = i - n_without_defaults
-                if default_index >= 0:
-                    default_val = defaults[default_index]
-                    env_key = f"_default_{arg}"
-                    env[env_key] = default_val
-                    args_parts.append(f"{arg}={env_key}")
-                else:
-                    args_parts.append(arg)
-            args_str = ", ".join(args_parts)
-            sig_str = (
-                f"{args_str}, *_wrapper_args, **_wrapper_kwargs"
-                if args_str
-                else "*_wrapper_args, **_wrapper_kwargs"
-            )
-            # For the call-through we pass only bare names (no default expressions)
-            call_args_str = ", ".join(args_list)
-            call_sig_str = (
-                f"{call_args_str}, *_wrapper_args, **_wrapper_kwargs"
-                if call_args_str
-                else "*_wrapper_args, **_wrapper_kwargs"
-            )
-
-            exec(
-                f"def wrapper({sig_str}): return _wrapper_invoke_api(_wrapper_system._addon_path, _wrapper_system_name, _wrapper_func_name, _wrapper_func, {call_sig_str})",
-                env,
-            )
-
-            wrapper = env["wrapper"]
-            wrapper.__name__ = func.__name__  # type: ignore[attr-defined]
-            wrapper.__doc__ = func.__doc__  # type: ignore[attr-defined]
-            wrapper.__is_api_wrapper__ = True  # type: ignore[attr-defined]
-
-            return wrapper
+        if callable(name):
+            func = name
+            name = None
+            return decorator(func)
 
         return decorator
 
@@ -164,10 +176,21 @@ class APISystem:
         when: str = "before",
         version_constraint: str = "",
         requires_provider: Optional[list[RuntimeTargetAddon]] = None,
-        expose_api_as: Optional[RuntimeExposedHook] = None,
+        expose_api_as: ExposeAs = True,
         yields_to: Optional[list[RuntimeTargetFunction]] = None,
     ):
         def decorator(func):
+            actual_expose: Optional[RuntimeExposedHook] = None
+            if expose_api_as is True:
+                actual_expose = RuntimeExposedHook(name=func.__name__, is_unstable=True)
+            elif isinstance(expose_api_as, str):
+                actual_expose = RuntimeExposedHook(name=expose_api_as, is_unstable=True)
+            elif isinstance(expose_api_as, RuntimeExposedHook):
+                actual_expose = expose_api_as
+            elif isinstance(expose_api_as, tuple):
+                assert len(expose_api_as) == 2, "Invalid expose_api_as tuple"
+                actual_expose = RuntimeExposedHook(*expose_api_as, is_unstable=True)
+
             self._pending_hooks.append(
                 {
                     "target": target.to_dict(),
@@ -176,9 +199,13 @@ class APISystem:
                     "constraint": version_constraint,
                     "yields_to": [y.to_dict() for y in yields_to or []],
                     "requires_provider": [y.to_dict() for y in requires_provider or []],
-                    "expose_api_as": expose_api_as.to_dict() if expose_api_as else None,
+                    "expose_api_as": actual_expose.to_dict() if actual_expose else None,
                 }
             )
+
+            if actual_expose:
+                return self._wrap_func(func, actual_expose.name)
+
             return func
 
         return decorator
@@ -186,11 +213,53 @@ class APISystem:
     def override(
         self,
         target: RuntimeTargetFunction,
-        version: str = ">=1.0",
+        version_constraint: str = "",
         yields_to: Optional[list[RuntimeTargetFunction]] = None,
-        expose_api_as: Optional[RuntimeExposedHook] = None,
+        requires_provider: Optional[list[RuntimeTargetAddon]] = None,
+        expose_api_as: ExposeAs = True,
     ):
-        return self.hook(target, "override", version, None, expose_api_as, yields_to)
+        return self.hook(
+            target,
+            "override",
+            version_constraint,
+            requires_provider,
+            expose_api_as,
+            yields_to,
+        )
+
+    def before(
+        self,
+        target: RuntimeTargetFunction,
+        version_constraint: str = "",
+        yields_to: Optional[list[RuntimeTargetFunction]] = None,
+        requires_provider: Optional[list[RuntimeTargetAddon]] = None,
+        expose_api_as: ExposeAs = True,
+    ):
+        return self.hook(
+            target,
+            "before",
+            version_constraint,
+            requires_provider,
+            expose_api_as,
+            yields_to,
+        )
+
+    def after(
+        self,
+        target: RuntimeTargetFunction,
+        version_constraint: str = "",
+        yields_to: Optional[list[RuntimeTargetFunction]] = None,
+        requires_provider: Optional[list[RuntimeTargetAddon]] = None,
+        expose_api_as: ExposeAs = True,
+    ):
+        return self.hook(
+            target,
+            "after",
+            version_constraint,
+            requires_provider,
+            expose_api_as,
+            yields_to,
+        )
 
     def on_ready(self, target: RuntimeTargetAddon):
         """Decorator: Run when a specific system in another addon is ready."""
@@ -244,9 +313,6 @@ class APISystem:
 
         Every change is recorded in _expose_all_originals
         """
-        import inspect
-        import fnmatch
-
         exclude_list = exclude if exclude else []
         visited_ids = self._expose_all_visited
 
@@ -335,7 +401,7 @@ class APISystem:
         _traverse(target)
         return target
 
-    def get_override(self, name: str) -> tuple[str, SystemKey, AddonName]:
+    def get_override(self, name: str):
         return get_registry().get_active_implementation(
             self._addon_path, self.system_name, name
         )
@@ -347,7 +413,7 @@ def get_addon_path() -> AddonPath:
     return "unknown_addon"
 
 
-def get_system_module(name: AddonName, system_name: SystemKey) -> Optional[ModuleType]:
+def get_system_module(name: AddonName, system_name: SystemKey):
     return get_registry().get_system_module(name, target_system_name=system_name)
 
 

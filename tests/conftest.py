@@ -71,8 +71,14 @@ def V(major, minor=0, patch=0) -> APIVersion:
 
 
 @pytest.fixture
+def one_addon():
+    """Returns ("Addon A", "addon_a", None)"""
+    return create_system("Addon A", {}, "addon_a", None)
+
+
+@pytest.fixture
 def two_addons():
-    """Returns ((addon, sys_a), (addon_b, sys_b)) — the most common two-addon test setup."""
+    """Returns ("Addon A", "addon_a", ("core",)), ("Addon B", "addon_b", None)"""
     pair_a = create_system("Addon A", {}, "addon_a", ("core",))
     pair_b = create_system("Addon B", {}, "addon_b", None)
     return pair_a, pair_b

@@ -161,7 +161,18 @@ class APIRegistry:
             system.functions[func.name] = func
 
         for hook_data in system_data.get("hooks", []):
-            system.hooks.append(self._create_runtime_hook(hook_data, system))
+            hook = self._create_runtime_hook(hook_data, system)
+            system.hooks.append(hook)
+            if hook.expose_api_as:
+                if hook.expose_api_as.name not in system.functions:
+                    system.functions[hook.expose_api_as.name] = RuntimeFunction(
+                        name=hook.expose_api_as.name,
+                        func=hook.func,
+                        version=hook.expose_api_as.version,
+                        docs=hook.func.__doc__ or "",
+                        is_unstable=hook.expose_api_as.is_unstable,
+                        from_hook=True,
+                    )
 
         system.on_ready = self._create_runtime_waiters(system_data.get("on_ready", {}))
         system.on_exit = self._create_runtime_waiters(system_data.get("on_exit", {}))
@@ -414,7 +425,20 @@ class APIRegistry:
         assert "version" in info, "API function must have a version"
 
         system_data = self._get_system(addon_path, system_name)
-        system_data["functions"][info["name"]] = info
+        name = info["name"]
+
+        if name in system_data["functions"]:
+            logger.warning(
+                f"Collision: Function '{name}' already exists in {addon_path}:{system_name}"
+            )
+
+        for hook in system_data["hooks"]:
+            if hook.get("expose_api_as") and hook["expose_api_as"].get("name") == name:
+                logger.warning(
+                    f"Collision: Function '{name}' collides with an exposed hook in {addon_path}:{system_name}"
+                )
+
+        system_data["functions"][name] = info
         self.invalidate_cache()
 
     def register_hook(self, addon_path: AddonPath, system_name: SystemKey, info: dict):
@@ -423,6 +447,22 @@ class APIRegistry:
         assert "target" in info, "API hook must have a target"
 
         system_data = self._get_system(addon_path, system_name)
+        expose = info.get("expose_api_as")
+        if expose:
+            name = expose["name"]
+            if name in system_data["functions"]:
+                logger.warning(
+                    f"Collision: Exposed hook '{name}' collides with a function in {addon_path}:{system_name}"
+                )
+            for hook in system_data["hooks"]:
+                if (
+                    hook.get("expose_api_as")
+                    and hook["expose_api_as"].get("name") == name
+                ):
+                    logger.warning(
+                        f"Collision: Exposed hook '{name}' collides with another exposed hook in {addon_path}:{system_name}"
+                    )
+
         system_data["hooks"].append(info)
 
         self.invalidate_cache()
@@ -1081,11 +1121,12 @@ class APIRegistry:
         if errors:
             row.alert = True
 
+        icon = "🔗 " if func.from_hook else "📜 "
         if nothing_to_see:
             result = False
-            row.label(text=f"📜 {func.name}{version}")
+            row.label(text=f"{icon}{func.name}{version}")
         else:
-            result = self.draw_tab(row, key, text=f"📜 {func.name}{version}")
+            result = self.draw_tab(row, key, text=f"{icon}{func.name}{version}")
         if func.is_unstable:
             unstable_row = row.row()
             unstable_row.alignment = "RIGHT"

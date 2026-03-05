@@ -1,4 +1,5 @@
-from conftest import create_system
+from blender_api_lib.api_types import RuntimeTargetFunction
+from conftest import create_system, reg, target
 
 
 class TestFunctionAPI:
@@ -54,3 +55,26 @@ class TestFunctionAPI:
         assert (
             fn_with_defaults("x", "world", 99) == "x-world-99"
         ), "Should override both"
+
+    def test_call_hook_directly(self, two_addons):
+        (a, s_a), (b, s_b) = two_addons
+        order = []
+
+        @s_a.function(name="base")
+        def base():
+            order.append("base")
+
+        @s_b.hook(target("base"), when="before")
+        def hook_of_base():
+            order.append("hook")
+
+        @s_a.hook(RuntimeTargetFunction("Addon B", "hook_of_base", None), when="before")
+        def hook_of_hook():
+            order.append("hook_of_hook")
+
+        reg((a, s_a), (b, s_b))
+
+        # Call the auto-exposed hook directly.
+        hook_of_base()
+
+        assert order == ["hook_of_hook", "hook"]

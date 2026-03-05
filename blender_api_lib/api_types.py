@@ -127,6 +127,7 @@ class RuntimeFunction:
     version: APIVersion
     docs: str = ""
     is_unstable: bool = False
+    from_hook: bool = False
 
 
 @dataclass
@@ -172,15 +173,20 @@ class RuntimeTargetAddon:
 class RuntimeExposedHook:
     name: str
     version: APIVersion = field(default_factory=APIVersion)
+    is_unstable: bool = False
 
     def to_dict(self):
-        return {"name": self.name, "version": self.version}
+        return {
+            "name": self.name,
+            "version": self.version,
+            "is_unstable": self.is_unstable,
+        }
 
     @classmethod
     def from_dict(cls, data: dict):
         for key in {"name", "version"}:
             assert key in data, f"Missing key in RuntimeExposedHook: {key}"
-        return cls(data["name"], data["version"])
+        return cls(data["name"], data["version"], data.get("is_unstable", False))
 
 
 @dataclass
