@@ -10,7 +10,7 @@ import inspect
 import sys
 import dataclasses
 from types import ModuleType
-from typing import NamedTuple, Optional, Callable
+from typing import Optional, Callable, Any
 
 from .api_types import (
     APIVersion,
@@ -88,9 +88,13 @@ class APIRegistry:
             bpy.utils.unregister_class(API_OT_ToggleUISection)
             self._registered_ui = False
 
+    def get_ui_toggle(self, key: str, default: bool = False):
+        assert HAS_BPY, "Blender Python API not found"
+        return self._ui_toggles.get(key, default)
+
     def toggle_expanded(self, key: str):
         assert HAS_BPY, "Blender Python API not found"
-        self._ui_toggles[key] = not self._ui_toggles.get(key, True)
+        self._ui_toggles[key] = not self.get_ui_toggle(key)
 
     # --- Data Parsing Methods ---
 
@@ -114,6 +118,7 @@ class APIRegistry:
         for y in hook_data.get("yields_to", []):
             yields_to.append(RuntimeTargetFunction.from_dict(y))
 
+        # TODO: expose as function too
         expose_api_as = hook_data.get("expose_api_as")
         if expose_api_as is not None:
             expose_api_as = RuntimeExposedHook.from_dict(expose_api_as)
@@ -1026,10 +1031,14 @@ class APIRegistry:
                 self._draw_chain_recursive(layout, a, depth + 1, "AFTER")
 
     def draw_tab(
-        self, layout: "bpy.types.UILayout", key: str, text: Optional[str] = None
+        self,
+        layout: "bpy.types.UILayout",
+        key: str,
+        text: Optional[str] = None,
+        default: bool = False,
     ):
-        state = self._ui_toggles.get(key, True)
-        left_side = layout.row(align=True)
+        state = self.get_ui_toggle(key, default)
+        left_side = layout.row()
         left_side.alignment = "LEFT"
         op = left_side.operator(
             API_OT_ToggleUISection.bl_idname,
@@ -1040,17 +1049,21 @@ class APIRegistry:
         op.key = key
         return state
 
+    def _draw_indent(self, layout: "bpy.types.UILayout") -> "bpy.types.UILayout":
+        """Creates a sub-layout indented by a small factor."""
+        split = layout.split(factor=0.02)
+        split.column()  # spacer
+        return split.column()
+
     def _draw_execution_chain(
         self,
-        layout,
+        layout: "bpy.types.UILayout",
+        func: RuntimeFunction,
         owner_path: AddonPath,
         system_name: SystemKey,
-        func: RuntimeFunction,
     ):
         """Draws the detailed hook and override execution chain for a specific function."""
         key = f"chain.{owner_path}.{system_name}.{func.name}"
-        box = layout.box()
-        row = box.row()
         version = "" if func.version.is_none else f" (v{func.version})"
 
         try:
@@ -1058,124 +1071,235 @@ class APIRegistry:
                 owner_path, system_name, func.name, func.func
             )
         except Exception as exception:
-            chain, errors = None, ["Error resolving chain: {exception}"]
+            chain, errors = None, [f"Error resolving chain: {exception}"]
 
         nothing_to_see = (
             chain and not chain.before and not chain.after and not chain.old_main
         ) and not errors
+        box = layout if nothing_to_see else layout.box()
+        row = box.row()
         if errors:
             row.alert = True
 
         if nothing_to_see:
             result = False
-            row.label(text=f"{func.name}{version}")
+            row.label(text=f"📜 {func.name}{version}")
         else:
-            result = self.draw_tab(row, key, text=f"{func.name}{version}")
+            result = self.draw_tab(row, key, text=f"📜 {func.name}{version}")
         if func.is_unstable:
             unstable_row = row.row()
             unstable_row.alignment = "RIGHT"
             unstable_row.label(text="UNSTABLE", icon="ERROR")
-        if not result:
+
+        if result:
+            for error in errors:
+                error_layout = box.row()
+                error_layout.alert = True
+                error_layout.label(text=error, icon="ERROR")
+
+            chain_col = box.column(align=True)
+            self._draw_chain_recursive(chain_col, chain)
+
+    def _draw_maybe_paginated(
+        self,
+        layout: "bpy.types.UILayout",
+        key: str,
+        items: list[Any],
+        draw_single: Callable[..., None],
+        get_name: Callable[[Any], str],
+    ):
+        """Chunks items into groups of 10 with range tabs if needed."""
+        col = layout.column()
+        if len(items) <= 10:
+            for item in items:
+                draw_single(col, item)
             return
 
-        for error in errors:
-            error_layout = box.row()
-            error_layout.alert = True
-            error_layout.label(text=error, icon="ERROR")
+        for i in range(0, len(items), 10):
+            chunk = items[i : i + 10]
+            label = f"{get_name(chunk[0])} .. {get_name(chunk[-1])}"
+            if self.draw_tab(col, f"{key}.p{i}:{i + 10}", text=label):
+                page_col = self._draw_indent(col)
+                for item in chunk:
+                    draw_single(page_col, item)
+                col.separator(factor=0.2)
 
-        chain_col = box.column(align=True)
-        self._draw_chain_recursive(chain_col, chain)
+    def _draw_hierarchical_sections(
+        self,
+        layout: "bpy.types.UILayout",
+        key: str,
+        items: list[tuple[str, Any]],
+        draw_func: Callable,
+        *args: Any,
+    ):
+        """Splits keys by dot and draws nested tabs, paginating large levels."""
+        groups: dict[str, list[tuple[str, Any]]] = {}
+        for k, v in items:
+            parts = k.split(".", 1)
+            groups.setdefault(parts[0], []).append(
+                (parts[1] if len(parts) > 1 else "", v)
+            )
+
+        sorted_groups = sorted(groups.items())
+
+        # flat, paginate directly
+        if len(sorted_groups) == 1 and sorted_groups[0][0] == "":
+            self._draw_maybe_paginated(
+                layout,
+                key,
+                [v for k, v in sorted_groups[0][1]],
+                lambda l, it: draw_func(l, it, *args),
+                lambda it: getattr(it, "name", str(it)).split(".")[-1],
+            )
+            return
+
+        # Otherwise, paginate the prefix groups
+        def draw_group(l, group):
+            name, sub_items = group
+            if len(sub_items) == 1 and not sub_items[0][0]:
+                draw_func(l, sub_items[0][1], *args)
+                return
+
+            group_key = f"{key}.{name}"
+            if self.draw_tab(l, group_key, text=name):
+                col = self._draw_indent(l)
+                self._draw_hierarchical_sections(
+                    col, group_key, sub_items, draw_func, *args
+                )
+                l.separator(factor=0.2)
+
+        self._draw_maybe_paginated(
+            layout, key + ".g", sorted_groups, draw_group, lambda x: x[0]
+        )
 
     def _draw_system_functions(
         self,
-        layout,
+        layout: "bpy.types.UILayout",
         addon_path: AddonPath,
         system_name: SystemKey,
         system: RuntimeSystem,
     ):
         if not system.functions:
             return
-        func_col = layout.column()
-        func_col.label(text="Execution Chains:")
-        for func in system.functions.values():
-            self._draw_execution_chain(func_col, addon_path, system_name, func)
+        if not self.draw_tab(
+            layout, f"funcs.{addon_path}.{system_name}", text="⇶ Execution Chains"
+        ):
+            return
+        col = self._draw_indent(layout)
+        items = [(f.name, f) for f in system.functions.values()]
+        self._draw_hierarchical_sections(
+            col,
+            f"funcs.{addon_path}.{system_name}",
+            items,
+            self._draw_execution_chain,
+            addon_path,
+            system_name,
+        )
 
-    def _draw_system_hooks(self, layout, system: RuntimeSystem):
+    def _draw_system_hooks(self, layout: "bpy.types.UILayout", system: RuntimeSystem):
+        col = layout.column()
         if not system.hooks:
             return
-        hook_col = layout.column()
-        hook_col.label(text="Registered Hooks:", icon="LINKED")
-        for hook in system.hooks:
-            target_sys_str = self._format_system_name(hook.target.system)
-            error = self._get_hook_validation_error(hook)
-
-            key = (
-                f"hook.{hook.system.name}.{hook.system.addon.name}.{hook.func.__name__}"
+        # blender makes 🪝 into greyscale thankfully
+        if self.draw_tab(
+            col, f"hooks.{system.addon.name}.{system.name}", text="🪝 Hooks"
+        ):
+            col = self._draw_indent(col)
+            items = [(h.func.__name__ or h.expose_api_as, h) for h in system.hooks]
+            self._draw_hierarchical_sections(
+                col,
+                f"hooks.{system.addon.name}.{system.name}",
+                items,
+                self._draw_hook_item,
             )
-            hook_icon = {
-                HookType.BEFORE: "◁",
-                HookType.AFTER: "▷",
-                HookType.OVERRIDE: "●",
-            }[hook.hook_type]
 
-            hook_text = f"{hook_icon} {hook.func.__name__} ({hook.target.function})"
+    def _draw_hook_item(self, layout: "bpy.types.UILayout", hook: RuntimeHook):
+        target_sys_str = self._format_system_name(hook.target.system)
+        error = self._get_hook_validation_error(hook)
+        key = f"hook.{hook.system.name}.{hook.system.addon.name}.{hook.func.__name__}"
 
-            box = hook_col.box().column()
-            op_layout = box.row()
-            op_layout.alert = error is not None
-            if not self.draw_tab(op_layout, key, hook_text):
-                continue
+        hook_icon = {
+            HookType.BEFORE: "◁",
+            HookType.AFTER: "▷",
+            HookType.OVERRIDE: "●",
+        }[hook.hook_type]
 
-            box.label(
-                text=f"Target System: {hook.target.addon}:{target_sys_str}",
-                icon="LINKED",
-            )
-            box.label(
-                text=f"Target Function: {hook.target.function} {hook.version_constraint}",
-                icon="SCRIPT",
-            )
-            if error:
-                error_layout = box.row()
-                error_layout.alert = True
-                error_layout.label(text=error, icon="ERROR")
+        col = layout.column()
+        op_layout = col.row()
+        op_layout.alert = error is not None
 
-    def _draw_system_waiters(self, layout, system: RuntimeSystem):
+        if not self.draw_tab(
+            op_layout, key, f"{hook_icon} {hook.func.__name__} ({hook.target.function})"
+        ):
+            return
+        split = col.split(factor=0.03)
+        split.column()
+        col = split.column()
+        col.label(
+            text=f"Target System: {hook.target.addon}:{target_sys_str}",
+            icon="LINKED",
+        )
+        col.label(
+            text=f"Target Function: {hook.target.function} {hook.version_constraint}",
+            icon="SCRIPT",
+        )
+        if error:
+            error_layout = col.row()
+            error_layout.alert = True
+            error_layout.label(text=error, icon="ERROR")
+
+        col.separator(factor=0.5)
+
+    def _draw_system_waiters(self, layout: "bpy.types.UILayout", system: RuntimeSystem):
         if not system.on_ready and not system.on_exit:
             return
-        wait_col = layout.column()
-        wait_col.label(text="Lifecycle Waiters:", icon="TIME")
+        # ⧖ might look better.. don't know
+        if not self.draw_tab(
+            layout,
+            f"lifecycle.{system.addon.name}.{system.name}",
+            text="⏳ Lifecycle Waiters",
+        ):
+            return
+        col = self._draw_indent(layout)
         for target in system.on_ready:
-            wait_col.label(
-                text=f"On Ready -> {target.addon}:{self._format_system_name(target.system)}"
+            col.label(
+                text=f"📥 On Ready -> {target.addon}:{self._format_system_name(target.system)}"
             )
         for target in system.on_exit:
-            wait_col.label(
-                text=f"On Exit -> {target.addon}:{self._format_system_name(target.system)}"
+            col.label(
+                text=f"📤 On Exit -> {target.addon}:{self._format_system_name(target.system)}"
             )
 
     def _draw_system(
         self,
-        layout,
+        layout: "bpy.types.UILayout",
         addon_path: AddonPath,
         system_name: SystemKey,
         system: RuntimeSystem,
     ):
-        system_box = layout.box()
-        header_row = system_box.row()
-        header_row.label(
-            text="Default System"
-            if system_name is None
-            else f"System: {self._format_system_name(system_name)}",
-            icon="PREFERENCES",
+        col = layout.column()
+        header_row = col.row()
+        result = self.draw_tab(
+            header_row,
+            f"sys.{addon_path}.{system_name}",
+            text="⚙ "
+            + (
+                "Default System"
+                if system_name is None
+                else self._format_system_name(system_name)
+            ),
         )
         if system.ready:
             header_row_right = header_row.row(align=True)
             header_row_right.alignment = "RIGHT"
-            header_row_right.label(text="Marked ready")
+            header_row_right.label(text="Finalized", icon="CHECKMARK")
 
-        self._draw_system_functions(system_box, addon_path, system_name, system)
-        self._draw_system_hooks(system_box, system)
-        self._draw_system_waiters(system_box, system)
+        if result:
+            col = self._draw_indent(col)
+
+            self._draw_system_functions(col, addon_path, system_name, system)
+            self._draw_system_hooks(col, system)
+            self._draw_system_waiters(col, system)
 
     def _draw_addon(self, layout, addon_path: AddonPath, addon: RuntimeAddon):
         addon_box = layout.box()
