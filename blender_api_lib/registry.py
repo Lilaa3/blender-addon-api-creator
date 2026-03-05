@@ -1205,7 +1205,14 @@ class APIRegistry:
             col, f"hooks.{system.addon.name}.{system.name}", text="🪝 Hooks"
         ):
             col = self._draw_indent(col)
-            items = [(h.func.__name__ or h.expose_api_as, h) for h in system.hooks]
+            items = [
+                (
+                    (h.expose_api_as.name if h.expose_api_as else "")
+                    or h.func.__name__,
+                    h,
+                )
+                for h in system.hooks
+            ]
             self._draw_hierarchical_sections(
                 col,
                 f"hooks.{system.addon.name}.{system.name}",
@@ -1216,7 +1223,10 @@ class APIRegistry:
     def _draw_hook_item(self, layout: "bpy.types.UILayout", hook: RuntimeHook):
         target_sys_str = self._format_system_name(hook.target.system)
         error = self._get_hook_validation_error(hook)
-        key = f"hook.{hook.system.name}.{hook.system.addon.name}.{hook.func.__name__}"
+        hook_name = (
+            hook.expose_api_as.name if hook.expose_api_as else ""
+        ) or hook.func.__name__
+        key = f"hook.{hook.system.name}.{hook.system.addon.name}.{hook_name}"
 
         hook_icon = {
             HookType.BEFORE: "◁",
@@ -1229,7 +1239,7 @@ class APIRegistry:
         op_layout.alert = error is not None
 
         if not self.draw_tab(
-            op_layout, key, f"{hook_icon} {hook.func.__name__} ({hook.target.function})"
+            op_layout, key, f"{hook_icon} {hook_name} ({hook.target.function})"
         ):
             return
         split = col.split(factor=0.03)
