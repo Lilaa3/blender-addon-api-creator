@@ -11,21 +11,19 @@ class MockBase:
 
 class TestClassMethodCollisions:
     def test_expose_all_preserves_classmethod(self):
+        class MyPanel(MockBase):
+            @classmethod
+            def poll(cls, context):
+                return "wrapped_poll"
+
         # Create a mock module
         mod_name = "mock_addon_module"
         mod = types.ModuleType(mod_name)
         mod.__name__ = mod_name
+        mod.MyPanel = MyPanel
         sys.modules[mod_name] = mod
 
         try:
-
-            class MyPanel(MockBase):
-                @classmethod
-                def poll(cls, context):
-                    return "wrapped_poll"
-
-            mod.MyPanel = MyPanel
-
             a, s = create_system("Addon A", {}, "addon_a", ("core",))
 
             s.expose_all(mod, recursive=True)

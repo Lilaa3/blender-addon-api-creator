@@ -104,6 +104,9 @@ class APIContext:
     active_system: SystemKey = None
     active_function: str = ""
     is_main: bool = False
+    unstable_hashes: dict[str, str] = field(default_factory=dict)
+    active_hash: str | None = ""
+    target_hash: str | None = ""
 
     def get_data(self, key: str) -> Optional[Any]:
         """Retrieves data stored in the context by hooks."""
@@ -122,12 +125,14 @@ class APIContext:
 class RuntimeFunction:
     """Represents a registered API function."""
 
+    system: "RuntimeSystem"
     name: str
     func: Callable
     version: APIVersion
     docs: str = ""
     is_unstable: bool = False
     from_hook: bool = False
+    hash: str = ""
 
 
 @dataclass
@@ -136,6 +141,8 @@ class RuntimeTargetFunction:
     function: str
     system: SystemKey = None
     version_constraint: str = ""
+    expected_hashes: list[str] = field(default_factory=list)
+    error_on_hash_mismatch: bool = False
 
     def to_dict(self):
         return {
@@ -143,6 +150,8 @@ class RuntimeTargetFunction:
             "function": self.function,
             "system": self.system,
             "version_constraint": self.version_constraint,
+            "expected_hashes": self.expected_hashes,
+            "error_on_hash_mismatch": self.error_on_hash_mismatch,
         }
 
     @classmethod
@@ -150,7 +159,12 @@ class RuntimeTargetFunction:
         for key in {"addon", "function", "system", "version_constraint"}:
             assert key in data, f"Missing key in RuntimeTargetFunction: {key}"
         return cls(
-            data["addon"], data["function"], data["system"], data["version_constraint"]
+            data["addon"],
+            data["function"],
+            data["system"],
+            data["version_constraint"],
+            data.get("expected_hashes", []),
+            data.get("error_on_hash_mismatch", False),
         )
 
 
@@ -174,19 +188,26 @@ class RuntimeExposedHook:
     name: str
     version: APIVersion = field(default_factory=APIVersion)
     is_unstable: bool = False
+    hash: str = ""
 
     def to_dict(self):
         return {
             "name": self.name,
             "version": self.version,
             "is_unstable": self.is_unstable,
+            "hash": self.hash,
         }
 
     @classmethod
     def from_dict(cls, data: dict):
         for key in {"name", "version"}:
             assert key in data, f"Missing key in RuntimeExposedHook: {key}"
-        return cls(data["name"], data["version"], data.get("is_unstable", False))
+        return cls(
+            data["name"],
+            data["version"],
+            data.get("is_unstable", False),
+            data.get("hash", ""),
+        )
 
 
 @dataclass
@@ -243,6 +264,7 @@ class RuntimeExecutionNode:
     system: RuntimeSystem
     name: str | None = None
     version: APIVersion = field(default_factory=APIVersion)
+    hash: str = ""
 
 
 @dataclass

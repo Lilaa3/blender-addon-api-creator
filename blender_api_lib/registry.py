@@ -9,6 +9,8 @@ import logging
 import inspect
 import sys
 import dataclasses
+import hashlib
+import types
 from types import ModuleType
 from typing import Optional, Callable, Any
 
@@ -54,6 +56,81 @@ if HAS_BPY:
             get_registry().toggle_expanded(self.key)
             return {"FINISHED"}
 
+    class API_OT_CopyTarget(bpy.types.Operator):
+        """Copies a RuntimeTargetFunction call for the given function"""
+
+        bl_idname = "api.copy_target"
+        bl_label = "Copy RuntimeTargetFunction"
+
+        addon: bpy.props.StringProperty()  # type: ignore[valid-type]
+        system: bpy.props.StringProperty()  # type: ignore[valid-type]
+        function: bpy.props.StringProperty()  # type: ignore[valid-type]
+        hash: bpy.props.StringProperty()  # type: ignore[valid-type]
+
+        def execute(self, context):
+            self.system: str
+            system = None
+            # parse system back to tuple or None
+            if self.system:
+                system = self.system.split(".")
+                if system:
+                    system = tuple(system)
+
+            h_part = f', expected_hashes=["{self.hash}"]' if self.hash else ""
+            res = f'RuntimeTargetFunction(addon="{self.addon}", function="{self.function}", system={repr(system)}{h_part})'
+
+            context.window_manager.clipboard = res
+            self.report({"INFO"}, f"Copied to clipboard: {res}")
+            return {"FINISHED"}
+
+
+def function_hash(func: Callable):
+    # Recursively unwrap decorators/wrappers to get the real underlying function
+    current = func
+    while True:
+        if hasattr(current, "__func__"):
+            current = current.__func__  # type: ignore[attr-defined]
+        elif hasattr(current, "__wrapped__"):
+            current = current.__wrapped__  # type: ignore[attr-defined]
+        else:
+            break
+
+    if not isinstance(current, types.FunctionType):
+        return ""
+
+    def _clean(obj: Any) -> Any:
+        if isinstance(obj, types.CodeType):
+            return (
+                obj.co_code,
+                obj.co_names,
+                obj.co_varnames,
+                obj.co_argcount,
+                obj.co_kwonlyargcount,
+                tuple(_clean(c) for c in obj.co_consts),
+            )
+        if isinstance(obj, (tuple, list)):
+            return tuple(_clean(x) for x in obj)
+        if isinstance(obj, dict):
+            return tuple((k, _clean(v)) for k, v in sorted(obj.items()))
+        return obj
+
+    code = current.__code__
+    # Combine bytecode + constants + default args + names
+    data = _clean(
+        (
+            code.co_code,
+            code.co_consts,
+            code.co_names,
+            code.co_varnames,
+            code.co_argcount,
+            code.co_kwonlyargcount,
+            current.__defaults__,
+            current.__kwdefaults__,
+        )
+    )
+    data_bytes = repr(data).encode("utf-8")
+    return hashlib.sha256(data_bytes).hexdigest()
+
 
 @dataclasses.dataclass
 class APIRegistry:
@@ -80,12 +157,18 @@ class APIRegistry:
         assert HAS_BPY, "Blender Python API not found"
 
         bpy.utils.register_class(API_OT_ToggleUISection)
+        bpy.utils.register_class(API_OT_CopyTarget)
+        bpy.types.Scene.blender_api_lib_show_hashes = bpy.props.BoolProperty(
+            name="Show Unstable Hashes",
+        )
         self._registered_ui = True
 
     def unregister_bpy_ui_props(self):
         assert HAS_BPY, "Blender Python API not found"
         if self._registered_ui:
             bpy.utils.unregister_class(API_OT_ToggleUISection)
+            bpy.utils.unregister_class(API_OT_CopyTarget)
+            del bpy.types.Scene.blender_api_lib_show_hashes
             self._registered_ui = False
 
     def get_ui_toggle(self, key: str, default: bool = False):
@@ -98,16 +181,19 @@ class APIRegistry:
 
     # --- Data Parsing Methods ---
 
-    def _create_runtime_function(self, func_data: dict):
+    def _create_runtime_function(self, func_data: dict, system: RuntimeSystem):
         for key in {"name", "func", "version"}:
             if key not in func_data:
                 raise ValueError(f"Missing key in function: {key}")
+        is_unstable = func_data.get("unstable", False)
         return RuntimeFunction(
+            system=system,
             name=func_data["name"],
             func=func_data["func"],
             version=APIVersion.from_tuple(func_data["version"]),
             docs=func_data.get("docs", ""),
-            is_unstable=func_data.get("unstable", False),
+            is_unstable=is_unstable,
+            hash=function_hash(func_data["func"]) if is_unstable else "",
         )
 
     def _create_runtime_hook(self, hook_data: dict, system: RuntimeSystem):
@@ -118,10 +204,11 @@ class APIRegistry:
         for y in hook_data.get("yields_to", []):
             yields_to.append(RuntimeTargetFunction.from_dict(y))
 
-        # TODO: expose as function too
         expose_api_as = hook_data.get("expose_api_as")
         if expose_api_as is not None:
             expose_api_as = RuntimeExposedHook.from_dict(expose_api_as)
+            if expose_api_as.is_unstable:
+                expose_api_as.hash = function_hash(hook_data["func"])
 
         return RuntimeHook(
             system=system,
@@ -157,7 +244,7 @@ class APIRegistry:
         )
         system.module = (system_data.get("module") or {}).get("module")
         for func_data in system_data.get("functions", {}).values():
-            func = self._create_runtime_function(func_data)
+            func = self._create_runtime_function(func_data, system)
             system.functions[func.name] = func
 
         for hook_data in system_data.get("hooks", []):
@@ -166,12 +253,14 @@ class APIRegistry:
             if hook.expose_api_as:
                 if hook.expose_api_as.name not in system.functions:
                     system.functions[hook.expose_api_as.name] = RuntimeFunction(
+                        system=system,
                         name=hook.expose_api_as.name,
                         func=hook.func,
                         version=hook.expose_api_as.version,
                         docs=hook.func.__doc__ or "",
                         is_unstable=hook.expose_api_as.is_unstable,
                         from_hook=True,
+                        hash=hook.expose_api_as.hash,
                     )
 
         system.on_ready = self._create_runtime_waiters(system_data.get("on_ready", {}))
@@ -788,7 +877,19 @@ class APIRegistry:
             and self._meets_required(hook.requires_provider)
             and (active.version.match(hook.version_constraint))
         ):
-            return self._get_hook_validation_error(hook), True
+            validation_error = self._get_hook_validation_error(hook)
+            if validation_error:
+                return validation_error, True
+
+            if hook.target.expected_hashes:
+                if active.hash not in hook.target.expected_hashes:
+                    msg = f'Hash mismatch for "{active.name}" of "{active.system.addon.name}". Expected one of {hook.target.expected_hashes}, got "{active.hash}"'
+                    if hook.target.error_on_hash_mismatch:
+                        return msg, False
+                    else:
+                        return f"WARNING: {msg}", True
+
+            return None, True
 
         return None, False
 
@@ -841,6 +942,7 @@ class APIRegistry:
                             hook.system,
                             hook.expose_api_as.name,
                             hook.expose_api_as.version,
+                            hook.expose_api_as.hash,
                         )
                     overrides.append(node)
                 else:
@@ -875,6 +977,7 @@ class APIRegistry:
                         hook.system,
                         hook.expose_api_as.name,
                         hook.expose_api_as.version,
+                        hook.expose_api_as.hash,
                     )
                 new_chain = RuntimeExecutionChain(main=main)
                 if hook.expose_api_as is not None:
@@ -910,13 +1013,47 @@ class APIRegistry:
     ):
         sys = self._get_runtime_system(owner_path, owner_system)
         active = RuntimeExecutionNode(
-            original_func, sys, func_name, sys.functions[func_name].version
+            original_func,
+            sys,
+            func_name,
+            sys.functions[func_name].version,
+            sys.functions[func_name].hash,
         )
 
         chain = RuntimeExecutionChain(main=active)
         errors: list[str] = []
         self._build_execution_chain(chain, errors)
         return chain, errors
+
+    def get_execution_chain(
+        self,
+        owner_path: AddonPath,
+        owner_system: SystemKey,
+        name: str,
+        original_func: Callable,
+    ):
+        """Retrieves or builds the complete execution information for a given API function."""
+        cache_key = (owner_path, owner_system, name)
+        cached = self._invocation_cache.get(cache_key)
+        if cached is None:
+            chain, errors = self._start_build_execution_chain(
+                owner_path, owner_system, name, original_func
+            )
+
+            flat_nodes = self._flatten_execution_chain(chain, is_root=True)
+            steps = [self._get_execution_step(n, is_root) for n, is_root in flat_nodes]
+
+            # Find root main to extract authoritative bound arguments context
+            main_step = next((s for s in steps if s[5]), None)
+            try:
+                sig = inspect.signature(main_step[0]) if main_step else None
+            except ValueError:
+                sig = None
+
+            cached = (steps, errors, sig, chain)
+            self._invocation_cache[cache_key] = cached
+
+        return cached
 
     def _flatten_execution_chain(
         self, chain: RuntimeExecutionChain, is_root: bool = True
@@ -950,6 +1087,7 @@ class APIRegistry:
             node.system.addon.name,
             node.system.name,
             is_root,
+            node.hash,
         )
 
     def invoke(
@@ -962,30 +1100,15 @@ class APIRegistry:
         **kwargs,
     ):
         """Invokes an API function, executing any registered hooks sequentially along a flattened execution chain."""
-        cache_key = (owner_path, owner_system, name)
-
-        cached = self._invocation_cache.get(cache_key)
-        if cached is None:
-            chain, errors = self._start_build_execution_chain(
-                owner_path, owner_system, name, original_func
-            )
-
-            flat_nodes = self._flatten_execution_chain(chain, is_root=True)
-            steps = [self._get_execution_step(n, is_root) for n, is_root in flat_nodes]
-
-            # Find root main to extract authoritative bound arguments context
-            main_step = next((s for s in steps if s[5]), None)
-            try:
-                sig = inspect.signature(main_step[0]) if main_step else None
-            except ValueError:
-                sig = None
-
-            cached = (steps, errors, sig)
-            self._invocation_cache[cache_key] = cached
-
-        steps, errors, sig = cached
+        steps, errors, sig, chain = self.get_execution_chain(
+            owner_path, owner_system, name, original_func
+        )
         for error in errors:
-            logger.error(error)
+            if "WARNING:" in error:
+                logger.warning(error)
+            else:
+                logger.error(error)
+                raise RuntimeError(error)
 
         try:
             if sig:
@@ -1003,14 +1126,29 @@ class APIRegistry:
             args=list(args),
             kwargs=kwargs.copy(),
             arguments=arguments,
+            unstable_hashes={
+                step_name: step_hash
+                for _, _, step_name, _, _, _, step_hash in steps
+                if step_hash
+            },
         )
 
-        for func, ctx_mode, step_name, addon_name, system_name, is_main in steps:
+        for (
+            func,
+            ctx_mode,
+            step_name,
+            addon_name,
+            system_name,
+            is_main,
+            step_hash,
+        ) in steps:
             # Update APIContext to make the active execution block fully aware of its environment
             ctx.active_addon = addon_name
             ctx.active_system = system_name
             ctx.active_function = step_name
             ctx.is_main = is_main
+            ctx.active_hash = step_hash
+            ctx.target_hash = ctx.unstable_hashes.get(step_name)
 
             try:
                 res = self._call_with_context(ctx_mode, func, ctx, ctx.args, ctx.kwargs)
@@ -1031,10 +1169,19 @@ class APIRegistry:
     def _format_system_name(self, system_name: SystemKey):
         return ".".join(system_name) if system_name else ""
 
+    def get_label_stuff(self, node: RuntimeExecutionNode):
+        sys_str = self._format_system_name(node.system.name)
+        version = "" if node.version.is_none else f" (v{node.version})"
+        return (
+            sys_str,
+            version,
+            f"{node.system.addon.name}:{sys_str}.{node.name or node.func.__name__}{version}",
+        )
+
     def _draw_chain_recursive(
         self, layout, chain: RuntimeExecutionChain, depth: int = 0, role: str = "MAIN"
     ):
-        prefix = "  " * depth
+        col = layout.column()
 
         if role == "BEFORE":
             label_prefix = "◀ Before: "
@@ -1045,30 +1192,52 @@ class APIRegistry:
 
         for old in chain.old_main:
             for b in old.before:
-                self._draw_chain_recursive(layout, b, depth + 1, "BEFORE")
+                before_indented_col = self._draw_indent(col)
+                self._draw_chain_recursive(before_indented_col, b, depth + 1, "BEFORE")
 
-            sys_str = self._format_system_name(old.main.system.name)
-            version = "" if old.main.version.is_none else f" (v{old.main.version})"
-            layout.label(
-                text=f"{prefix} ∅ [Replaced] {old.main.system.addon.name}:{sys_str}.{old.main.name or old.main.func.__name__}{version}",
+            node = old.main
+            sys_str, _version, label = self.get_label_stuff(node)
+            copy_row = col.row()
+            copy_row.alignment = "LEFT"
+            copy = copy_row.operator(
+                API_OT_CopyTarget.bl_idname,
+                text=f"∅ [Replaced] {label}",
+                icon="COPYDOWN",
+                emboss=False,
             )
+            copy.addon = node.system.addon.name
+            copy.system = sys_str
+            copy.function = node.name or node.func.__name__
+            if bpy.context.scene.blender_api_lib_show_hashes:
+                copy.hash = node.hash if node.hash else ""
 
         for b in chain.before:
-            self._draw_chain_recursive(layout, b, depth + 1, "BEFORE")
+            self._draw_chain_recursive(col, b, depth + 1, "BEFORE")
 
         node = chain.main
-        sys_str = self._format_system_name(node.system.name)
-        version = "" if node.version.is_none else f" (v{node.version})"
-        layout.label(
-            text=f"{prefix}{label_prefix}{node.system.addon.name}:{sys_str}.{node.name or node.func.__name__}{version}"
-        )
+        sys_str, version, label = self.get_label_stuff(node)
+        if HAS_BPY:
+            row = col.row(align=True)
+            row.alignment = "LEFT"
+            copy = row.operator(
+                API_OT_CopyTarget.bl_idname,
+                text=f"{label_prefix}{label}",
+                icon="COPYDOWN",
+                emboss=False,
+            )
+            copy.addon = node.system.addon.name
+            copy.system = sys_str
+            copy.function = node.name or node.func.__name__
+            if bpy.context.scene.blender_api_lib_show_hashes:
+                copy.hash = node.hash if node.hash else ""
 
         for a in chain.after:
-            self._draw_chain_recursive(layout, a, depth + 1, "AFTER")
+            self._draw_chain_recursive(col, a, depth + 1, "AFTER")
 
         for old in reversed(chain.old_main):
             for a in old.after:
-                self._draw_chain_recursive(layout, a, depth + 1, "AFTER")
+                after = self._draw_indent(col)
+                self._draw_chain_recursive(after, a, depth + 1, "AFTER")
 
     def draw_tab(
         self,
@@ -1092,8 +1261,9 @@ class APIRegistry:
     def _draw_indent(self, layout: "bpy.types.UILayout") -> "bpy.types.UILayout":
         """Creates a sub-layout indented by a small factor."""
         split = layout.split(factor=0.02)
-        split.column()  # spacer
-        return split.column()
+        split.row()  # spacer
+        col = split.column()
+        return col
 
     def _draw_execution_chain(
         self,
@@ -1103,43 +1273,64 @@ class APIRegistry:
         system_name: SystemKey,
     ):
         """Draws the detailed hook and override execution chain for a specific function."""
-        key = f"chain.{owner_path}.{system_name}.{func.name}"
+        col = layout.column()
+        sys_str = self._format_system_name(system_name)
+        key = f"chain.{owner_path}.{sys_str}.{func.name}"
         version = "" if func.version.is_none else f" (v{func.version})"
 
         try:
-            chain, errors = self._start_build_execution_chain(
+            steps, errors, sig, chain = self.get_execution_chain(
                 owner_path, system_name, func.name, func.func
             )
         except Exception as exception:
-            chain, errors = None, [f"Error resolving chain: {exception}"]
+            steps, errors, sig, chain = (
+                None,
+                [f"Error resolving chain: {exception}"],
+                None,
+                None,
+            )
 
         nothing_to_see = (
             chain and not chain.before and not chain.after and not chain.old_main
         ) and not errors
-        box = layout if nothing_to_see else layout.box()
-        row = box.row()
+        row = col.row()
         if errors:
             row.alert = True
 
         icon = "🔗 " if func.from_hook else "📜 "
         if nothing_to_see:
             result = False
-            row.label(text=f"{icon}{func.name}{version}")
+            copy_row = row.row()
+            copy_row.alignment = "LEFT"
+            copy = copy_row.operator(
+                API_OT_CopyTarget.bl_idname,
+                text=f"{icon}{func.name}{version}",
+                icon="COPYDOWN",
+                emboss=False,
+            )
+            copy.addon, copy.system = func.system.addon.name, sys_str
+            copy.function = func.name or func.func.__name__
+            if bpy.context.scene.blender_api_lib_show_hashes:
+                copy.hash = func.hash if func.hash else ""
         else:
             result = self.draw_tab(row, key, text=f"{icon}{func.name}{version}")
         if func.is_unstable:
             unstable_row = row.row()
             unstable_row.alignment = "RIGHT"
             unstable_row.label(text="UNSTABLE", icon="ERROR")
+            if bpy.context.scene.blender_api_lib_show_hashes:
+                indent = self._draw_indent(col)
+                indent.label(text=f"Hash: {func.hash}", icon="BOOKMARKS")
 
         if result:
             for error in errors:
-                error_layout = box.row()
+                error_layout = col.row()
                 error_layout.alert = True
                 error_layout.label(text=error, icon="ERROR")
 
-            chain_col = box.column(align=True)
+            chain_col = self._draw_indent(col)
             self._draw_chain_recursive(chain_col, chain)
+            col.separator(factor=0.5)
 
     def _draw_maybe_paginated(
         self,
@@ -1363,15 +1554,18 @@ class APIRegistry:
     def draw_ui(self, layout):
         """Draws a visual representation of the API Registry inside Blender UI."""
         assert HAS_BPY, "Blender Python API not found"
+        col = layout.column()
+        col.scale_y = 0.8
+        col.prop(bpy.context.scene, "blender_api_lib_show_hashes")
         addons = self._create_runtime_addons()
         if not addons:
-            layout.label(text="No API Addons Registered")
+            col.label(text="No API Addons Registered")
             return
 
         for addon_path, addon in sorted(
             addons.items(), key=lambda item: (item[1].name, item[0])
         ):
-            self._draw_addon(layout, addon_path, addon)
+            self._draw_addon(col, addon_path, addon)
 
 
 def register_registry(reload: bool = False, with_ui: bool = True):

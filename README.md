@@ -205,3 +205,27 @@ By default these are marked as unstable, they can have a prefix appended at the 
 ```python
 api.expose_all(sys.modules[__name__], exclude=["*blender_api_lib*"], starting_prefix="unstable.", unstable=True, recursive=True, hide_private=True)
 ```
+
+### 11. Unstable Function Hashes
+Functions marked as `unstable=True` (including all those from `expose_all`) and auto-exposed hooks are automatically hashed based on their bytecode and constants. These hashes are available in the `APIContext.unstable_hashes` dictionary. 
+
+Consumers can verify that the underlying implementation of an unstable function hasn't changed by providing `expected_hashes` in the `RuntimeTargetFunction`. This can be configured to either log a warning (default) or block the hook entirely with an error.
+
+```python
+# Warn if hash doesn't match
+target = RuntimeTargetFunction(
+    "Host", "unstable_func", 
+    expected_hashes=["c5bb758d9d054aa450769cafe5364716ce562958c03c0cd498f0aaba7ebaf565"]
+)
+
+# Block if hash doesn't match
+target = RuntimeTargetFunction(
+    "Host", "unstable_func", 
+    expected_hashes=["c5bb758d9d054aa450769cafe5364716ce562958c03c0cd498f0aaba7ebaf565"],
+    error_on_hash_mismatch=True
+)
+
+@api.hook(target=target, when="before")
+def secure_hook(ctx: APIContext):
+    print("Implementation verified!")
+```
