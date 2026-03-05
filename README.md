@@ -229,3 +229,16 @@ target = RuntimeTargetFunction(
 def secure_hook(ctx: APIContext):
     print("Implementation verified!")
 ```
+
+## User Interface
+
+The library includes a built-in UI for visualizing registered addons. This can be integrated into any Blender panel.
+
+![UI](ui_example.png)
+
+To include the UI in your addon, use `register_registry` in the addon `__init__`, then call `draw_ui` from the registry:
+```python
+class MY_PT_Panel(bpy.types.Panel):
+    def draw(self, context):
+        get_registry().draw_ui(self.layout)
+```
