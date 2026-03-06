@@ -6,7 +6,18 @@ This was written with the intention of using it in [Fast64](https://github.com/F
 > This project is still in early development, it is NOT ready to be used.
 > Breaking changes are accepted for now. Even if the registry should be minimally changed from now on.
 
+## How it Works
+
+The library operates on a decoupled Client-Registry:
+
+   **Local (Client)**: Definitions created are initially stored as "pending" within a local `APISystem` object inside your addon. When `register_addon`/`register_system` is called, it connects your addon to the **Registry**
+   
+   **Global (Registry)**: A shared singleton singleton stored in `sys.modules`. It can handle versioning by checking the client's own target registry, if an addon has a newer registry the older one is ported to it. The internal types are builtin python ones, that can be converted to Runtime types for type checking and further validation.
+
+
 ## Installation
+
+
 
 - **The easy way**:
 
