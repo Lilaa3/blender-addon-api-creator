@@ -43,7 +43,7 @@ class TestUnstableHash:
         unstable_func()
         assert (
             hashes_received.get("unstable_func")
-            == "c5bb758d9d054aa450769cafe5364716ce562958c03c0cd498f0aaba7ebaf565"
+            == "4a34afbbe0b5147978542c24b00d8d39536049b7430b3e7ef2f42ab674e51ee9"
         )
 
         a, s = one_addon
@@ -62,7 +62,7 @@ class TestUnstableHash:
         unstable_func2()
         assert (
             hashes_received.get("unstable_func2")
-            == "c5bb758d9d054aa450769cafe5364716ce562958c03c0cd498f0aaba7ebaf565"
+            == "4a34afbbe0b5147978542c24b00d8d39536049b7430b3e7ef2f42ab674e51ee9"
         )
 
         a, s = one_addon
@@ -81,7 +81,11 @@ class TestUnstableHash:
         unstable_func3()
         assert (
             hashes_received.get("unstable_func3")
-            != "c5bb758d9d054aa450769cafe5364716ce562958c03c0cd498f0aaba7ebaf565"
+            != "4a34afbbe0b5147978542c24b00d8d39536049b7430b3e7ef2f42ab674e51ee9"
+        )
+        assert (
+            hashes_received.get("unstable_func3")
+            == "1ac9c4567e7d044ffdce8366e95579f4d183b9a82bc91dc49e0e11959084c518"
         )
 
     def test_hash_validation_constraints(self, two_addons, caplog):

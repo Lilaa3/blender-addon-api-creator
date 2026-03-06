@@ -11,6 +11,8 @@ import sys
 import dataclasses
 import hashlib
 import types
+import ast
+import textwrap
 from types import ModuleType
 from typing import Optional, Callable, Any
 
@@ -96,38 +98,31 @@ def function_hash(func: Callable):
     if not isinstance(current, types.FunctionType):
         return ""
 
-    def _clean(obj: Any) -> Any:
-        if isinstance(obj, types.CodeType):
-            return (
-                obj.co_code,
-                obj.co_names,
-                obj.co_varnames,
-                obj.co_argcount,
-                obj.co_kwonlyargcount,
-                tuple(_clean(c) for c in obj.co_consts),
-            )
-        if isinstance(obj, (tuple, list)):
-            return tuple(_clean(x) for x in obj)
-        if isinstance(obj, dict):
-            return tuple((k, _clean(v)) for k, v in sorted(obj.items()))
-        return obj
+    try:
+        source = inspect.getsource(current)
+        source = textwrap.dedent(source)
+        tree = ast.parse(source)
 
-    code = current.__code__
-    # Combine bytecode + constants + default args + names
-    data = _clean(
-        (
-            code.co_code,
-            code.co_consts,
-            code.co_names,
-            code.co_varnames,
-            code.co_argcount,
-            code.co_kwonlyargcount,
-            current.__defaults__,
-            current.__kwdefaults__,
-        )
-    )
-    data_bytes = repr(data).encode("utf-8")
-    return hashlib.sha256(data_bytes).hexdigest()
+        # Find the FunctionDef node for this function
+        target_node = None
+        for node in tree.body:
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == current.__name__
+            ):
+                target_node = node
+                break
+
+        if target_node:
+            target_node.decorator_list = []
+            target_node.name = "_"
+            stable_repr = ast.unparse(target_node)
+            data = (stable_repr, current.__defaults__, current.__kwdefaults__)
+            return hashlib.sha256(repr(data).encode("utf-8")).hexdigest()
+    except Exception:
+        logger.warning(f"Failed to compute stable hash for function {func}")
+
+    return ""
 
 
 @dataclasses.dataclass
