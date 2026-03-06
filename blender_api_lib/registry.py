@@ -50,9 +50,7 @@ if HAS_BPY:
 
         key: bpy.props.StringProperty()  # type: ignore[valid-type]
 
-        def execute(self, context):
-            from .registry import get_registry
-
+        def execute(self, context: "bpy.types.Context"):
             get_registry().toggle_expanded(self.key)
             return {"FINISHED"}
 
@@ -67,7 +65,7 @@ if HAS_BPY:
         function: bpy.props.StringProperty()  # type: ignore[valid-type]
         hash: bpy.props.StringProperty()  # type: ignore[valid-type]
 
-        def execute(self, context):
+        def execute(self, context: "bpy.types.Context"):
             self.system: str
             system = None
             # parse system back to tuple or None

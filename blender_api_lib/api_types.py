@@ -1,6 +1,6 @@
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, TypeAlias
 from types import ModuleType
 
 
@@ -12,9 +12,9 @@ class HookType(Enum):
     OVERRIDE = "override"
 
 
-AddonPath = str
-AddonName = str
-SystemKey = Optional[tuple[str, ...]]
+AddonPath: TypeAlias = str
+AddonName: TypeAlias = str
+SystemKey: TypeAlias = Optional[tuple[str, ...]]
 
 
 @dataclass

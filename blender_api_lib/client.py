@@ -3,7 +3,7 @@ import logging
 import inspect
 import fnmatch
 from types import ModuleType
-from typing import Any, Optional, Callable, cast
+from typing import Any, Optional, Callable, cast, TypeAlias
 from .registry import get_registry
 from .api_types import (
     APIVersion,
@@ -18,7 +18,7 @@ from .api_types import (
 
 logger = logging.getLogger(__name__)
 
-ExposeAs = RuntimeExposedHook | tuple | str | bool
+ExposeAs: TypeAlias = RuntimeExposedHook | tuple | str | bool
 
 
 def invoke_api(
@@ -75,6 +75,7 @@ class APISystem:
     def unregister_system(self):
         self._restore_expose_all_originals()
         self._expose_all_visited.clear()
+        assert self._addon_path is not None
         get_registry().unregister_system(self._addon_path, self.system_name)
 
     def _restore_expose_all_originals(self):
@@ -179,7 +180,7 @@ class APISystem:
         expose_api_as: ExposeAs = True,
         yields_to: Optional[list[RuntimeTargetFunction]] = None,
     ):
-        def decorator(func):
+        def decorator(func: Callable):
             actual_expose: Optional[RuntimeExposedHook] = None
             if expose_api_as is True:
                 actual_expose = RuntimeExposedHook(name=func.__name__, is_unstable=True)
@@ -292,6 +293,7 @@ class APISystem:
         return decorator
 
     def finalize_system(self):
+        assert self._addon_path is not None
         get_registry().finalize_system(self._addon_path, self.system_name)
 
     def expose_module(self, module: ModuleType):
@@ -402,6 +404,7 @@ class APISystem:
         return target
 
     def get_override(self, name: str):
+        assert self._addon_path is not None
         return get_registry().get_active_implementation(
             self._addon_path, self.system_name, name
         )
@@ -430,6 +433,7 @@ class APIAddon:
 
     def register_addon(self):
         registry = get_registry()
+        assert self.addon_path is not None
         registry.register_addon(
             self.addon_path, self.name, MY_VERSION, {"bl_info": self.bl_info}
         )
@@ -438,6 +442,7 @@ class APIAddon:
         for system in self.systems.values():
             system.unregister_system()
         registry = get_registry()
+        assert self.addon_path is not None
         registry.unregister_addon(self.addon_path)
 
     def register_system(self, system: APISystem):
