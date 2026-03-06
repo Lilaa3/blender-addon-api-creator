@@ -64,7 +64,7 @@ class APIVersion:
             minor_req = parts[1] if len(parts) > 1 else 0
             patch_req = parts[2] if len(parts) > 2 else 0
 
-            self_tuple = (0 or self.major, 0 or self.minor, 0 or self.patch)
+            self_tuple = (self.major or 0, self.minor or 0, self.patch or 0)
             req_tuple = (major_req, minor_req, patch_req)
 
             if op == ">=":

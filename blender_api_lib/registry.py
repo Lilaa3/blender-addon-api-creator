@@ -1126,7 +1126,10 @@ class APIRegistry:
             },
         )
 
-        for (
+        return self._run_steps(steps, ctx, original_func)
+
+    def _run_steps(self, steps: list, ctx: APIContext, original_func: Callable):
+        for i, (
             func,
             ctx_mode,
             step_name,
@@ -1134,8 +1137,7 @@ class APIRegistry:
             system_name,
             is_main,
             step_hash,
-        ) in steps:
-            # Update APIContext to make the active execution block fully aware of its environment
+        ) in enumerate(steps):
             ctx.active_addon = addon_name
             ctx.active_system = system_name
             ctx.active_function = step_name
@@ -1145,6 +1147,7 @@ class APIRegistry:
 
             try:
                 res = self._call_with_context(ctx_mode, func, ctx, ctx.args, ctx.kwargs)
+
                 if is_main:
                     ctx.set_data("result", res)
             except Exception as exception:
@@ -1165,10 +1168,11 @@ class APIRegistry:
     def get_label_stuff(self, node: RuntimeExecutionNode):
         sys_str = self._format_system_name(node.system.name)
         version = "" if node.version.is_none else f" (v{node.version})"
+        prefix = f"{sys_str}." if sys_str else ""
         return (
             sys_str,
             version,
-            f"{node.system.addon.name}:{sys_str}.{node.name or node.func.__name__}{version}",
+            f"{node.system.addon.name}:{prefix}{node.name or node.func.__name__}{version}",
         )
 
     def _draw_chain_recursive(

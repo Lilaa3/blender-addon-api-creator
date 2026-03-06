@@ -2,6 +2,7 @@ import dataclasses
 import logging
 import inspect
 import fnmatch
+import functools
 from types import ModuleType
 from typing import Any, Optional, Callable, cast, TypeAlias
 from .registry import get_registry
@@ -138,8 +139,7 @@ class APISystem:
         )
 
         wrapper = cast(Callable, env["wrapper"])
-        wrapper.__name__ = func.__name__  # type: ignore[attr-defined]
-        wrapper.__doc__ = func.__doc__  # type: ignore[attr-defined]
+        functools.update_wrapper(wrapper, func)
         wrapper.__is_api_wrapper__ = True  # type: ignore[attr-defined]
 
         return wrapper
@@ -312,10 +312,11 @@ class APISystem:
         """
         Automatically expose all functions and methods within a target module or class.
         By default, sets `unstable=True` to flag these automated endpoints safely.
+        exclude_list includes "*blender_api_lib*" by default.
 
         Every change is recorded in _expose_all_originals
         """
-        exclude_list = exclude if exclude else []
+        exclude_list = exclude if exclude else ["*blender_api_lib*"]
         visited_ids = self._expose_all_visited
 
         base_package = None

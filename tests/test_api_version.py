@@ -30,6 +30,7 @@ class TestAPIVersion:
     @pytest.mark.parametrize(
         "major,minor,patch,constraint,matches",
         [
+            (None, None, None, ">=1.0.0", False),
             (2, 0, 0, ">=2.0.0", True),
             (2, 0, 1, ">=2.0.0", True),
             (1, 9, 9, ">=2.0.0", False),

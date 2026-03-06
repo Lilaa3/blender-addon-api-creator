@@ -78,3 +78,20 @@ class TestFunctionAPI:
         hook_of_base()
 
         assert order == ["hook_of_hook", "hook"]
+
+    def test_attribute_preservation(self):
+        a, s = create_system("Addon A", {}, "addon_a", ("core",))
+
+        def my_func():
+            """Docs."""
+            pass
+
+        my_func._is_persistent = True
+        my_func.some_custom_attr = "hello"
+
+        wrapped = s.function(my_func)
+
+        assert wrapped.__name__ == "my_func"
+        assert wrapped.__doc__ == "Docs."
+        assert getattr(wrapped, "_is_persistent", False) is True
+        assert getattr(wrapped, "some_custom_attr", None) == "hello"
