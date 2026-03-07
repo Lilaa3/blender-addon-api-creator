@@ -751,14 +751,14 @@ class APIRegistry:
             found_system = True
 
             if target.function in system.functions:
-                return system.functions[target.function].func, None
+                return system.functions[target.function], None
 
             for h in system.hooks:
                 if h.expose_api_as and (
                     h.expose_api_as.name == target.function
                     and h.expose_api_as.version.match(target.version_constraint)
                 ):
-                    return h.func, None
+                    return system.functions[h.expose_api_as.name], None
         if not found_system:
             return None, "Target system not found"
         return None, "Target function not found"
@@ -770,7 +770,7 @@ class APIRegistry:
             return error
 
         try:
-            target_sig = inspect.signature(target_func)
+            target_sig = inspect.signature(target_func.func)
             hook_sig = inspect.signature(hook.func)
         except ValueError:
             return "Invalid signature"
