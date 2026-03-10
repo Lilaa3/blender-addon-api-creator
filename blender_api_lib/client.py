@@ -94,10 +94,7 @@ class APISystem:
     def _wrap_func(self, func: Callable, api_name: str):
         """Wraps a function to invoke the API chain when called."""
         system_name = self.system_name
-
-        # Hack: Mimic the exact positional argument count for Blender's strict C-level checks
-        args_list = func.__code__.co_varnames[: func.__code__.co_argcount]
-        defaults = func.__defaults__ or ()
+        sig = inspect.signature(func)
 
         env = {
             "_wrapper_invoke_api": invoke_api,
@@ -107,36 +104,59 @@ class APISystem:
             "_wrapper_func": func,
         }
 
-        # Align defaults to the tail of args_list (same as CPython's own rule)
-        n_without_defaults = len(args_list) - len(defaults)
-        args_parts = []
-        for i, arg in enumerate(args_list):
-            default_index = i - n_without_defaults
-            if default_index >= 0:
-                default_val = defaults[default_index]
-                env_key = f"_default_{arg}"
-                env[env_key] = default_val
-                args_parts.append(f"{arg}={env_key}")
-            else:
-                args_parts.append(arg)
-        args_str = ", ".join(args_parts)
-        sig_str = (
-            f"{args_str}, *_wrapper_args, **_wrapper_kwargs"
-            if args_str
-            else "*_wrapper_args, **_wrapper_kwargs"
-        )
-        # For the call-through we pass only bare names (no default expressions)
-        call_args_str = ", ".join(args_list)
-        call_sig_str = (
-            f"{call_args_str}, *_wrapper_args, **_wrapper_kwargs"
-            if call_args_str
-            else "*_wrapper_args, **_wrapper_kwargs"
-        )
+        params_parts: list[str] = []
+        call_parts: list[str] = []
+        last_kind: inspect._ParameterKind | None = None
 
-        exec(
-            f"def wrapper({sig_str}): return _wrapper_invoke_api(_wrapper_system._addon_path, _wrapper_system_name, _wrapper_func_name, _wrapper_func, {call_sig_str})",
-            env,
-        )
+        for name, param in sig.parameters.items():
+            # Add / for positional-only transitions
+            if (
+                last_kind == inspect.Parameter.POSITIONAL_ONLY
+                and param.kind != inspect.Parameter.POSITIONAL_ONLY
+            ):
+                params_parts.append("/")
+
+            # Add * for keyword-only transitions
+            if (
+                last_kind != inspect.Parameter.KEYWORD_ONLY
+                and param.kind == inspect.Parameter.KEYWORD_ONLY
+            ):
+                # Only add * if there wasn't a *args already
+                if not any(
+                    p.kind == inspect.Parameter.VAR_POSITIONAL
+                    for p in sig.parameters.values()
+                ):
+                    params_parts.append("*")
+
+            p_str = name
+            if param.kind == inspect.Parameter.VAR_POSITIONAL:
+                p_str = f"*{name}"
+                call_parts.append(f"*{name}")
+            elif param.kind == inspect.Parameter.VAR_KEYWORD:
+                p_str = f"**{name}"
+                call_parts.append(f"**{name}")
+            else:
+                if param.kind == inspect.Parameter.KEYWORD_ONLY:
+                    call_parts.append(f"{name}={name}")
+                else:
+                    call_parts.append(name)
+
+                if param.default is not inspect.Parameter.empty:
+                    env_key = f"_wrapper_default_{name}"
+                    env[env_key] = param.default
+                    p_str += f"={env_key}"
+
+            params_parts.append(p_str)
+            last_kind = param.kind
+
+        if last_kind == inspect.Parameter.POSITIONAL_ONLY:
+            params_parts.append("/")
+
+        sig_str = ", ".join(params_parts)
+        call_sig_str = ", ".join(call_parts)
+
+        def_str = f"def wrapper({sig_str}): return _wrapper_invoke_api(_wrapper_system._addon_path, _wrapper_system_name, _wrapper_func_name, _wrapper_func, {call_sig_str})"
+        exec(def_str, env)
 
         wrapper = cast(Callable, env["wrapper"])
         functools.update_wrapper(wrapper, func)
