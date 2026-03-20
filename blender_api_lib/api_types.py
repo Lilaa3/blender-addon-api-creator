@@ -15,6 +15,13 @@ class HookType(Enum):
 AddonPath: TypeAlias = str
 AddonName: TypeAlias = str
 SystemKey: TypeAlias = Optional[tuple[str, ...]]
+FlatSystemKey: TypeAlias = str | SystemKey
+
+
+def normalize_system_key(system_name: FlatSystemKey) -> SystemKey:
+    if isinstance(system_name, str):
+        return (system_name,)
+    return system_name
 
 
 class ExecutionStep(NamedTuple):
@@ -193,10 +200,18 @@ class RuntimeFunction:
 class RuntimeTargetFunction:
     addon: AddonName
     function: str
-    system: SystemKey = None
+    system_key: FlatSystemKey = None
     version_constraint: str = ""
     expected_hashes: list[str] = field(default_factory=list)
     error_on_hash_mismatch: bool = False
+
+    @property
+    def system(self) -> SystemKey:
+        return normalize_system_key(self.system_key)
+
+    @system.setter
+    def system(self, value):
+        self.system_key = normalize_system_key(value)
 
     def to_dict(self):
         return {
@@ -225,7 +240,15 @@ class RuntimeTargetFunction:
 @dataclass(unsafe_hash=True)
 class RuntimeTargetAddon:
     addon: AddonName
-    system: SystemKey
+    system_key: FlatSystemKey
+
+    @property
+    def system(self) -> SystemKey:
+        return normalize_system_key(self.system_key)
+
+    @system.setter
+    def system(self, value):
+        self.system_key = normalize_system_key(value)
 
     def to_dict(self):
         return {"addon": self.addon, "system": self.system}

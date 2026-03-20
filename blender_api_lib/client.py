@@ -11,10 +11,12 @@ from .api_types import (
     APIVersion,
     AddonName,
     AddonPath,
+    FlatSystemKey,
     RuntimeExposedHook,
     RuntimeTargetAddon,
     RuntimeTargetFunction,
     SystemKey,
+    normalize_system_key,
     MY_VERSION,
 )
 
@@ -485,8 +487,10 @@ def get_addon_path() -> AddonPath:
     return "unknown_addon"
 
 
-def get_system_module(name: AddonName, system_name: SystemKey):
-    return get_registry().get_system_module(name, target_system_name=system_name)
+def get_system_module(name: AddonName, system_name: FlatSystemKey):
+    return get_registry().get_system_module(
+        name, target_system_name=normalize_system_key(system_name)
+    )
 
 
 @dataclasses.dataclass
@@ -522,7 +526,8 @@ class APIAddon:
         system.register_contents(self.addon_path)
         return system
 
-    def unregister_system(self, system_name: SystemKey):
+    def unregister_system(self, system_name: FlatSystemKey):
+        system_name = normalize_system_key(system_name)
         system = self.systems.pop(system_name, None)
         if system is None:
             return
@@ -532,8 +537,8 @@ class APIAddon:
 SYSTEMS: dict[SystemKey, APISystem] = {}
 
 
-def get_or_create_system(system_name: SystemKey):
-    system_name = tuple(system_name) if system_name else None
+def get_or_create_system(system_name: FlatSystemKey):
+    system_name = normalize_system_key(system_name)
     return SYSTEMS.setdefault(system_name, APISystem(system_name))
 
 
@@ -557,7 +562,7 @@ def unregister_addon():
     SYSTEMS.clear()
 
 
-def register_system(system: SystemKey | APISystem):
+def register_system(system: FlatSystemKey | APISystem):
     global API_ADDON_SINGLETON, SYSTEMS
     if API_ADDON_SINGLETON is None:
         logger.error("API Error: Register addon first")
@@ -569,13 +574,13 @@ def register_system(system: SystemKey | APISystem):
     return API_ADDON_SINGLETON.register_system(system)  # type: ignore[arg-type]
 
 
-def unregister_system(system: SystemKey | APISystem):
+def unregister_system(system: FlatSystemKey | APISystem):
     global API_ADDON_SINGLETON, SYSTEMS
     if API_ADDON_SINGLETON is None:
         return None
 
     if not isinstance(system, APISystem):
-        system_obj = SYSTEMS.get(system)
+        system_obj = SYSTEMS.get(normalize_system_key(system))
     else:
         system_obj = system
 

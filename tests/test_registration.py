@@ -89,3 +89,7 @@ class TestRegistration:
         assert (
             client.get_system_module("Addon A", ("core",)) is None
         ), "Module should not be exposed after reregister"
+
+    def test_string_system(self):
+        s = client.get_or_create_system("core")
+        assert s.system_name == ("core",), 'System name should be ("core",)'
