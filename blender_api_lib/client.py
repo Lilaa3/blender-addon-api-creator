@@ -6,6 +6,7 @@ import functools
 from types import ModuleType
 from typing import Any, Optional, Callable, cast, TypeAlias
 from .registry import get_registry
+from .execution import get_func_traits
 from .api_types import (
     APIVersion,
     AddonName,
@@ -155,7 +156,50 @@ class APISystem:
         sig_str = ", ".join(params_parts)
         call_sig_str = ", ".join(call_parts)
 
-        def_str = f"def wrapper({sig_str}): return _wrapper_invoke_api(_wrapper_system._addon_path, _wrapper_system_name, _wrapper_func_name, _wrapper_func, {call_sig_str})"
+        is_async, is_gen, is_async_gen = get_func_traits(func)
+
+        if is_async_gen:
+            # We wrap the entire process in a try...finally to ensure the inner generator is closed
+            # if the wrapper is closed while suspended at any point (including initial asend).
+            def_str = f"""
+async def wrapper({sig_str}):
+    gen = _wrapper_invoke_api(_wrapper_system._addon_path, _wrapper_system_name, _wrapper_func_name, _wrapper_func, {call_sig_str})
+    _done = False
+    try:
+        try:
+            val = await gen.asend(None)
+        except StopAsyncIteration:
+            _done = True
+            return
+        while True:
+            try:
+                sent = yield val
+            except GeneratorExit:
+                _done = True
+                await gen.aclose()
+                raise
+            except BaseException as e:
+                try:
+                    val = await gen.athrow(e)
+                except StopAsyncIteration:
+                    _done = True
+                    break
+            else:
+                try:
+                    val = await gen.asend(sent)
+                except StopAsyncIteration:
+                    _done = True
+                    break
+    finally:
+        if not _done:
+            await gen.aclose()
+"""
+        elif is_async:
+            def_str = f"async def wrapper({sig_str}): return await _wrapper_invoke_api(_wrapper_system._addon_path, _wrapper_system_name, _wrapper_func_name, _wrapper_func, {call_sig_str})"
+        elif is_gen:
+            def_str = f"def wrapper({sig_str}): return (yield from _wrapper_invoke_api(_wrapper_system._addon_path, _wrapper_system_name, _wrapper_func_name, _wrapper_func, {call_sig_str}))"
+        else:
+            def_str = f"def wrapper({sig_str}): return _wrapper_invoke_api(_wrapper_system._addon_path, _wrapper_system_name, _wrapper_func_name, _wrapper_func, {call_sig_str})"
         exec(def_str, env)
 
         wrapper = cast(Callable, env["wrapper"])
@@ -199,6 +243,7 @@ class APISystem:
         requires_provider: Optional[list[RuntimeTargetAddon]] = None,
         expose_api_as: ExposeAs = True,
         yields_to: Optional[list[RuntimeTargetFunction]] = None,
+        generator_mode: str = "append",
     ):
         def decorator(func: Callable):
             actual_expose: Optional[RuntimeExposedHook] = None
@@ -221,6 +266,7 @@ class APISystem:
                     "yields_to": [y.to_dict() for y in yields_to or []],
                     "requires_provider": [y.to_dict() for y in requires_provider or []],
                     "expose_api_as": actual_expose.to_dict() if actual_expose else None,
+                    "generator_mode": generator_mode,
                 }
             )
 
@@ -272,6 +318,7 @@ class APISystem:
         yields_to: Optional[list[RuntimeTargetFunction]] = None,
         requires_provider: Optional[list[RuntimeTargetAddon]] = None,
         expose_api_as: ExposeAs = True,
+        generator_mode: str = "append",
     ):
         return self.hook(
             target,
@@ -280,6 +327,7 @@ class APISystem:
             requires_provider,
             expose_api_as,
             yields_to,
+            generator_mode,
         )
 
     def on_ready(self, target: RuntimeTargetAddon):

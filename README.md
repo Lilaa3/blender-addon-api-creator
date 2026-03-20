@@ -11,8 +11,8 @@ This was written with the intention of using it in [Fast64](https://github.com/F
 The library operates on a decoupled Client-Registry:
 
    **Local (Client)**: Definitions created are initially stored as "pending" within a local `APISystem` object inside your addon. When `register_addon`/`register_system` is called, it connects your addon to the **Registry**
-   
-   **Global (Registry)**: A shared singleton singleton stored in `sys.modules`. It can handle versioning by checking the client's own target registry, if an addon has a newer registry the older one is ported to it. The internal types are builtin python ones, that can be converted to Runtime types for type checking and further validation.
+
+   **Global (Registry)**: A shared singleton stored in `sys.modules`. It can handle versioning by checking the client's own target registry, if an addon has a newer registry the older one is ported to it. The internal types are builtin python ones, that can be converted to Runtime types for type checking and further validation.
 
 
 ## Installation
@@ -134,7 +134,7 @@ def my_custom_math(ctx: APIContext):
 ### 5. Execution Order (Before / After)
 Hooks allow code to run without replacing the original logic. 
 - **Before**: Runs before the main function. Can modify `ctx.args` or `ctx.kwargs`.
-- **After**: Runs after the main function. Can access the result via `ctx.get_data("result")`.
+- **After**: Runs after the main function. Can access the result via `ctx.result`. You can also modify the result by assigning to `ctx.result`.
 
 ```python
 @api.hook(target=RuntimeTargetFunction("HostAddon", "do_math", ("Math", "Core")), when="before")
@@ -240,6 +240,32 @@ target = RuntimeTargetFunction(
 def secure_hook(ctx: APIContext):
     print("Implementation verified!")
 ```
+
+### 12. Generators & Async Streams
+
+The API supports `async` functions (even if blender it self doesn't yet), standard `generators`, and `async generators`. The wrapped function should still communicate exactly like it's original type.
+
+#### Intercepting Yields
+By default, hooks run before or after the generator is fully exhausted. If you need to filter or modify values *during* iteration, use `generator_mode="intercept"`.
+
+Intercept hooks wrap the entire pipeline, including any values yielded by `before` hooks or other generators in the chain.
+
+```python
+@api.after(target=RuntimeTargetFunction("Host", "my_gen"), generator_mode="intercept")
+def filter_values(ctx: APIContext):
+    # original_generator is the pipeline iterator (wrapping the inner generator).
+    original = ctx.original_generator
+    
+    while True:
+        try:
+            val = next(original)
+            if val > 10:
+                yield val * 2
+        except StopIteration as e:
+            return e.value
+```
+
+- **Validation**: You cannot attach an `async` hook to a `sync` function (this is validated at registration).
 
 ## User Interface
 

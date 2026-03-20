@@ -39,3 +39,26 @@ class TestAPIContext:
         assert ctx.get_data("list") == [1, 2, 3]
         assert ctx.get_data("none") is None
         assert ctx.get_data("dict") == {"a": 1}
+
+    def test_context_copy_shares_store(self):
+        ctx = APIContext(
+            api_name="test",
+            calling_addon="addon",
+            args=[],
+            kwargs={},
+            _store={"shared": True},
+        )
+        ctx.active_addon = "old"
+
+        ctx2 = ctx.copy()
+        assert ctx2.api_name == ctx.api_name
+        assert ctx2.active_addon == "old"
+        assert ctx2.get_data("shared") is True
+
+        # Modify store in copy
+        ctx2.set_data("new", 1)
+        assert ctx.get_data("new") == 1, "Original should be modified"
+
+        # Modify attribute in copy
+        ctx2.active_addon = "new"
+        assert ctx.active_addon == "old", "Original should not be modified"

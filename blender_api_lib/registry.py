@@ -16,7 +16,14 @@ import textwrap
 from types import ModuleType
 from typing import Optional, Callable, Any
 
+from .execution import (
+    flatten_execution_chain,
+    run_steps,
+    get_ctx_mode,
+    get_func_traits,
+)
 from .api_types import (
+    ExecutionStep,
     APIVersion,
     AddonPath,
     AddonName,
@@ -34,6 +41,7 @@ from .api_types import (
     SystemKey,
     RuntimeExecutionChain,
     RuntimeExecutionNode,
+    ExecutionChainStep,
 )
 
 logger = logging.getLogger(__name__)
@@ -198,6 +206,7 @@ class APIRegistry:
             yields_to.append(RuntimeTargetFunction.from_dict(y))
 
         expose_api_as = hook_data.get("expose_api_as")
+        generator_mode = hook_data.get("generator_mode", "append")
         if expose_api_as is not None:
             expose_api_as = RuntimeExposedHook.from_dict(expose_api_as)
             if expose_api_as.is_unstable:
@@ -215,6 +224,7 @@ class APIRegistry:
                 for p in hook_data.get("requires_provider", [])
             ],
             expose_api_as=expose_api_as,
+            generator_mode=generator_mode,
         )
 
     def _create_runtime_waiter(self, waiter_data: dict):
@@ -687,61 +697,13 @@ class APIRegistry:
 
     # --- Invocation & Execution ---
 
-    def _get_ctx_mode(self, func: Callable):
-        """Determines how 'ctx' should be passed to a function. 0: None, 1: Positional, 2: Kwarg."""
-        try:
-            sig = inspect.signature(func)
-        except ValueError:
-            return 0
-        if "ctx" in sig.parameters:
-            param = sig.parameters["ctx"]
-            if (
-                param.annotation == inspect.Parameter.empty
-                or getattr(param.annotation, "__name__", None) != "APIContext"
-            ):
-                return 0
-
-            if len(sig.parameters) != 1:
-                logger.warning(
-                    f"Function '{func.__name__}' has 'ctx' parameter but has other parameters"
-                )
-                return 0
-
-            if (
-                param.kind
-                in (
-                    inspect.Parameter.POSITIONAL_ONLY,
-                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                )
-                and list(sig.parameters.keys())[0] == "ctx"
-            ):
-                return 1
-            return 2
-        return 0
-
-    def _call_with_context(
-        self,
-        ctx_mode: int,
-        func: Callable,
-        ctx: APIContext,
-        args: list,
-        kwargs: dict,
-    ):
-        """Invokes a function with the appropriate context passing mode."""
-        if ctx_mode == 1:
-            return func(ctx)
-        elif ctx_mode == 2:
-            return func(ctx=ctx)
-        else:
-            return func(*args, **kwargs)
-
     def _get_target_function(self, target: RuntimeTargetFunction):
         """Resolves a target callable from the registry, checking base functions and exposed hooks."""
         target_addons = self._get_runtime_addons_by_name(
             target.addon, error_missing_addon=False
         )
         if not target_addons:
-            return None, "Target addon not found"
+            return None, "addon not found"
 
         found_system = False
         for addon in target_addons.values():
@@ -751,31 +713,54 @@ class APIRegistry:
             found_system = True
 
             if target.function in system.functions:
-                return system.functions[target.function], None
+                return system.functions[target.function].func, None
 
             for h in system.hooks:
                 if h.expose_api_as and (
                     h.expose_api_as.name == target.function
                     and h.expose_api_as.version.match(target.version_constraint)
                 ):
-                    return system.functions[h.expose_api_as.name], None
+                    return h.func, None
         if not found_system:
-            return None, "Target system not found"
-        return None, "Target function not found"
+            return None, "system not found"
+        return None, "function not found"
 
-    def _get_hook_validation_error(self, hook: RuntimeHook):
+    def _get_hook_validation_error(self, hook: RuntimeHook) -> str | None:
         """Strictly validates a hook's argument count and variadic capacity against its target."""
         target_func, error = self._get_target_function(hook.target)
         if error:
             return error
 
+        t_async, t_gen, _ = get_func_traits(target_func)
+        h_async, h_gen, _ = get_func_traits(hook.func)
+        intercept = hook.generator_mode == "intercept"
+
+        # Intercept specific validation
+        if intercept:
+            if not h_gen:
+                return f"intercept hook must be {'an async' if t_async else 'a sync'} generator"
+            if not t_gen:
+                return "intercept hook cannot attach to a non-generator function"
+            if t_async and not h_async:
+                return "sync generator intercept hook cannot attach to async generator"
+            if not t_async and h_async:
+                return "async generator intercept hook cannot attach to sync generator"
+        else:
+            # Regular hook validation
+            if h_async and not t_async:
+                h_type = "async generator" if h_gen else "async"
+                t_type = "sync generator" if t_gen else "sync"
+                return f"cannot attach {h_type} hook to {t_type} function"
+            if h_gen and not t_gen:
+                return "cannot attach a generator hook to a non-generator function"
+
         try:
-            target_sig = inspect.signature(target_func.func)
+            target_sig = inspect.signature(target_func)
             hook_sig = inspect.signature(hook.func)
         except ValueError:
-            return "Invalid signature"
+            return "invalid signature"
 
-        if self._get_ctx_mode(hook.func) != 0:
+        if get_ctx_mode(hook.func):
             return None  # if ctx is available, don't validate
 
         target_params = [p for n, p in target_sig.parameters.items()]
@@ -814,13 +799,13 @@ class APIRegistry:
         ]
 
         if len(hook_pos) < len(target_pos) and not hook_has_var_args:
-            return f"Expected {len(target_pos)} positional args, got {len(hook_pos)}"
+            return f"expected {len(target_pos)} positional args, got {len(hook_pos)}"
 
         hook_required_pos = [
             p for p in hook_pos if p.default == inspect.Parameter.empty
         ]
         if len(hook_required_pos) > len(target_pos) and not target_has_var_args:
-            return f"Requires {len(hook_required_pos)} positional args, target provides max {len(target_pos)}"
+            return f"requires {len(hook_required_pos)} positional args, provides max {len(target_pos)}"
 
         hook_required_kw_only = [
             p
@@ -832,9 +817,7 @@ class APIRegistry:
             target_names = {p.name for p in target_params}
             for hk in hook_required_kw_only:
                 if hk.name not in target_names:
-                    return (
-                        f"Requires keyword argument '{hk.name}' not provided by target"
-                    )
+                    return f"requires keyword argument '{hk.name}' not provided"
 
         target_kw_only = [
             p for p in target_params if p.kind == inspect.Parameter.KEYWORD_ONLY
@@ -843,7 +826,9 @@ class APIRegistry:
             hook_names = {p.name for p in hook_params}
             for tk in target_kw_only:
                 if tk.name not in hook_names:
-                    return f"Missing required keyword argument: '{tk.name}'"
+                    return f"missing required keyword argument '{tk.name}'"
+
+        return None
 
         return None
 
@@ -876,7 +861,7 @@ class APIRegistry:
 
             if hook.target.expected_hashes:
                 if active.hash not in hook.target.expected_hashes:
-                    msg = f'Hash mismatch for "{active.name}" of "{active.system.addon.name}". Expected one of {hook.target.expected_hashes}, got "{active.hash}"'
+                    msg = f'hash mismatch (expected one of {hook.target.expected_hashes}, got "{active.hash}")'
                     if hook.target.error_on_hash_mismatch:
                         return msg, False
                     else:
@@ -928,7 +913,9 @@ class APIRegistry:
             if result[1]:
                 if result[0] is None:
                     if hook.expose_api_as is None:
-                        node = RuntimeExecutionNode(hook.func, hook.system)
+                        node = RuntimeExecutionNode(
+                            hook.func, hook.system, generator_mode=hook.generator_mode
+                        )
                     else:
                         node = RuntimeExecutionNode(
                             hook.func,
@@ -936,10 +923,11 @@ class APIRegistry:
                             hook.expose_api_as.name,
                             hook.expose_api_as.version,
                             hook.expose_api_as.hash,
+                            generator_mode=hook.generator_mode,
                         )
                     overrides.append(node)
                 else:
-                    errors.append(result[0])
+                    errors.append(f'"{hook.target.function}": {result[0]}')
 
         if overrides:
             if len(overrides) > 1:
@@ -963,7 +951,9 @@ class APIRegistry:
                 hook_errors.append(result[0])
             if result[1]:
                 if hook.expose_api_as is None:
-                    main = RuntimeExecutionNode(hook.func, hook.system)
+                    main = RuntimeExecutionNode(
+                        hook.func, hook.system, generator_mode=hook.generator_mode
+                    )
                 else:
                     main = RuntimeExecutionNode(
                         hook.func,
@@ -971,13 +961,14 @@ class APIRegistry:
                         hook.expose_api_as.name,
                         hook.expose_api_as.version,
                         hook.expose_api_as.hash,
+                        generator_mode=hook.generator_mode,
                     )
                 new_chain = RuntimeExecutionChain(main=main)
                 if hook.expose_api_as is not None:
                     self._build_execution_chain(new_chain, hook_errors)
                 chain.add_hook(hook.hook_type, new_chain)
             for error in hook_errors:
-                errors.append(f'In hook "{hook.func.__name__}": {error}')
+                errors.append(f'"{hook.target.function}": {error}')
 
     def _build_execution_chain(self, chain: RuntimeExecutionChain, errors: list[str]):
         active = chain.main
@@ -1018,6 +1009,14 @@ class APIRegistry:
         self._build_execution_chain(chain, errors)
         return chain, errors
 
+    def _build_tree(self, c: RuntimeExecutionChain, is_root: bool = True):
+        return ExecutionChainStep(
+            main=self._get_execution_step(c.main, is_root),
+            before=[self._build_tree(x, False) for x in c.before],
+            old_main=[self._build_tree(x, False) for x in c.old_main],
+            after=[self._build_tree(x, False) for x in c.after],
+        )
+
     def get_execution_chain(
         self,
         owner_path: AddonPath,
@@ -1033,54 +1032,38 @@ class APIRegistry:
                 owner_path, owner_system, name, original_func
             )
 
-            flat_nodes = self._flatten_execution_chain(chain, is_root=True)
+            flat_nodes = flatten_execution_chain(chain, is_root=True)
             steps = [self._get_execution_step(n, is_root) for n, is_root in flat_nodes]
 
+            tree = self._build_tree(chain, is_root=True)
+
             # Find root main to extract authoritative bound arguments context
-            main_step = next((s for s in steps if s[5]), None)
+            main_step = next((s for s in steps if s.is_main), None)
             try:
-                sig = inspect.signature(main_step[0]) if main_step else None
+                sig = inspect.signature(main_step.func) if main_step else None
             except ValueError:
                 sig = None
 
-            cached = (steps, errors, sig, chain)
+            cached = (steps, errors, sig, chain, tree)
             self._invocation_cache[cache_key] = cached
 
         return cached
 
-    def _flatten_execution_chain(
-        self, chain: RuntimeExecutionChain, is_root: bool = True
-    ) -> list[tuple[RuntimeExecutionNode, bool]]:
-        """Recursively fully flattens an execution chain into an ordered list of execution node tuples."""
-        nodes = []
-
-        for old in chain.old_main:
-            for b in old.before:
-                nodes.extend(self._flatten_execution_chain(b, is_root=False))
-
-        for b in chain.before:
-            nodes.extend(self._flatten_execution_chain(b, is_root=False))
-
-        nodes.append((chain.main, is_root))
-
-        for a in chain.after:
-            nodes.extend(self._flatten_execution_chain(a, is_root=False))
-
-        for old in reversed(chain.old_main):
-            for a in old.after:
-                nodes.extend(self._flatten_execution_chain(a, is_root=False))
-
-        return nodes
-
     def _get_execution_step(self, node: RuntimeExecutionNode, is_root: bool):
-        return (
-            node.func,
-            self._get_ctx_mode(node.func),
-            node.name or node.func.__name__,
-            node.system.addon.name,
-            node.system.name,
-            is_root,
-            node.hash,
+        f = node.func
+        is_async, is_gen, is_async_gen = get_func_traits(f)
+        return ExecutionStep(
+            func=f,
+            ctx_mode=get_ctx_mode(f),
+            name=node.name or f.__name__,
+            addon_name=node.system.addon.name,
+            system_name=node.system.name,
+            is_main=is_root,
+            step_hash=node.hash,
+            is_async=is_async,
+            is_generator=is_gen,
+            generator_mode=node.generator_mode,
+            is_async_gen=is_async_gen,
         )
 
     def invoke(
@@ -1093,7 +1076,7 @@ class APIRegistry:
         **kwargs,
     ):
         """Invokes an API function, executing any registered hooks sequentially along a flattened execution chain."""
-        steps, errors, sig, chain = self.get_execution_chain(
+        steps, errors, sig, chain, tree = self.get_execution_chain(
             owner_path, owner_system, name, original_func
         )
         for error in errors:
@@ -1102,6 +1085,12 @@ class APIRegistry:
             else:
                 logger.error(error)
                 raise RuntimeError(error)
+
+        # Fast Path
+        if len(steps) == 1:
+            step = steps[0]
+            if step.ctx_mode == False and step.func is original_func:
+                return step.func(*args, **kwargs)
 
         try:
             if sig:
@@ -1120,45 +1109,11 @@ class APIRegistry:
             kwargs=kwargs.copy(),
             arguments=arguments,
             unstable_hashes={
-                step_name: step_hash
-                for _, _, step_name, _, _, _, step_hash in steps
-                if step_hash
+                step.name: step.step_hash for step in steps if step.step_hash
             },
         )
 
-        return self._run_steps(steps, ctx, original_func)
-
-    def _run_steps(self, steps: list, ctx: APIContext, original_func: Callable):
-        for i, (
-            func,
-            ctx_mode,
-            step_name,
-            addon_name,
-            system_name,
-            is_main,
-            step_hash,
-        ) in enumerate(steps):
-            ctx.active_addon = addon_name
-            ctx.active_system = system_name
-            ctx.active_function = step_name
-            ctx.is_main = is_main
-            ctx.active_hash = step_hash
-            ctx.target_hash = ctx.unstable_hashes.get(step_name)
-
-            try:
-                res = self._call_with_context(ctx_mode, func, ctx, ctx.args, ctx.kwargs)
-
-                if is_main:
-                    ctx.set_data("result", res)
-            except Exception as exception:
-                if func is original_func:
-                    raise exception
-                phase_name = "active" if is_main else "hook"
-                raise RuntimeError(
-                    f"Exception in {phase_name} function {step_name} of {addon_name}: {exception}"
-                ) from exception
-
-        return ctx.get_data("result")
+        return run_steps(steps, tree, ctx, original_func)
 
     # --- UI Drawing Methods ---
 
@@ -1276,13 +1231,14 @@ class APIRegistry:
         version = "" if func.version.is_none else f" (v{func.version})"
 
         try:
-            steps, errors, sig, chain = self.get_execution_chain(
+            steps, errors, sig, chain, tree = self.get_execution_chain(
                 owner_path, system_name, func.name, func.func
             )
         except Exception as exception:
-            steps, errors, sig, chain = (
+            steps, errors, sig, chain, tree = (
                 None,
                 [f"Error resolving chain: {exception}"],
+                None,
                 None,
                 None,
             )
