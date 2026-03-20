@@ -1,6 +1,6 @@
 from enum import Enum
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional, TypeAlias
+from typing import Any, Callable, Optional, TypeAlias, NamedTuple
 from types import ModuleType
 
 
@@ -15,6 +15,28 @@ class HookType(Enum):
 AddonPath: TypeAlias = str
 AddonName: TypeAlias = str
 SystemKey: TypeAlias = Optional[tuple[str, ...]]
+
+
+class ExecutionStep(NamedTuple):
+    func: Callable
+    ctx_mode: bool
+    name: str
+    addon_name: str
+    system_name: SystemKey
+    is_main: bool
+    step_hash: str
+    is_async: bool
+    is_generator: bool
+    generator_mode: str = "append"
+    is_async_gen: bool = False
+
+
+@dataclass
+class ExecutionChainStep:
+    main: ExecutionStep
+    before: list["ExecutionChainStep"] = field(default_factory=list)
+    old_main: list["ExecutionChainStep"] = field(default_factory=list)
+    after: list["ExecutionChainStep"] = field(default_factory=list)
 
 
 @dataclass
@@ -108,6 +130,18 @@ class APIContext:
     active_hash: str | None = ""
     target_hash: str | None = ""
 
+    # Shared results container so result is a reference rather than a value
+    _results: dict[str, Any] = field(default_factory=lambda: {"result": None})
+    original_generator: Any = None
+
+    @property
+    def result(self):
+        return self._results["result"]
+
+    @result.setter
+    def result(self, value):
+        self._results["result"] = value
+
     def get_data(self, key: str) -> Optional[Any]:
         """Retrieves data stored in the context by hooks."""
         return self._store.get(key)
@@ -115,6 +149,26 @@ class APIContext:
     def set_data(self, key: str, value):
         """Stores data in the context for other hooks to use."""
         self._store[key] = value
+
+    def copy(self) -> "APIContext":
+        """Creates a shallow copy of the context, preserving the shared data store."""
+        return APIContext(
+            api_name=self.api_name,
+            calling_addon=self.calling_addon,
+            args=self.args.copy(),
+            kwargs=self.kwargs.copy(),
+            arguments=self.arguments.copy(),
+            _store=self._store,
+            active_addon=self.active_addon,
+            active_system=self.active_system,
+            active_function=self.active_function,
+            is_main=self.is_main,
+            unstable_hashes=self.unstable_hashes,
+            active_hash=self.active_hash,
+            target_hash=self.target_hash,
+            _results=self._results,
+            original_generator=self.original_generator,
+        )
 
     def get_args(self, *names: str) -> tuple:
         """Retrieves bound arguments by name, regardless of whether they were passed as args or kwargs."""
@@ -222,6 +276,7 @@ class RuntimeHook:
     yields_to: list[RuntimeTargetFunction] = field(default_factory=list)
     requires_provider: list[RuntimeTargetAddon] = field(default_factory=list)
     expose_api_as: Optional[RuntimeExposedHook] = None
+    generator_mode: str = "append"
 
 
 @dataclass
@@ -261,10 +316,11 @@ class RuntimeAddon:
 @dataclass
 class RuntimeExecutionNode:
     func: Callable
-    system: RuntimeSystem
+    system: "RuntimeSystem"
     name: str | None = None
     version: APIVersion = field(default_factory=APIVersion)
     hash: str = ""
+    generator_mode: str = "append"
 
 
 @dataclass

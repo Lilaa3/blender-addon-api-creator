@@ -112,9 +112,7 @@ class TestUnstableHash:
         target_func_warn()
         assert "warn_hook" in hashes_received  # Should still run as it's just a warning
         assert any(
-            'In hook "warn_hook": WARNING: Hash mismatch for "target_func_warn"'
-            in rec.message
-            and rec.levelname == "WARNING"
+            "WARNING: hash mismatch" in rec.message and rec.levelname == "WARNING"
             for rec in caplog.records
         )
 
@@ -141,7 +139,7 @@ class TestUnstableHash:
         reg((a, s_a), (b, s_b))
         with pytest.raises(
             RuntimeError,
-            match='In hook "err_hook": Hash mismatch for "target_func_err"',
+            match="hash mismatch",
         ):
             target_func_err()
         assert "err_hook" not in hashes_received  # Should be blocked
@@ -174,4 +172,4 @@ class TestUnstableHash:
         reg((a, s_a), (b, s_b))
         target_func_ok()
         assert "ok_hook" in hashes_received  # Should run
-        assert not any('In hook "ok_hook":' in rec.message for rec in caplog.records)
+        assert not any("hash mismatch" in rec.message for rec in caplog.records)

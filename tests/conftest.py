@@ -125,3 +125,18 @@ def assert_not_exposed(func: str, system: SystemKey = None):
     """Assert function is NOT exposed, with clean error message."""
     result = get_target_function(func, "Addon A", system)
     assert not result[0], f"{func} should not be exposed: {result[1]}"
+
+
+def get_one_hook():
+    """Get one, and only if there is one, hook from the registry."""
+    hooks = [hook for hook in registry.get_registry()._iter_runtime_hooks()]
+    assert len(hooks) == 1
+    return hooks[0]
+
+
+def get_one_hook_validation_error():
+    """Get one, and only if there is one, validation error from the registry."""
+    hook = get_one_hook()
+    error = registry.get_registry()._get_hook_validation_error(hook)
+    assert error is not None
+    return error
